@@ -1,0 +1,80 @@
+2025-08-02 15:49:54 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 15:49:54 [INFO] api.auth: No valid tokens found, starting fresh authentication...
+2025-08-02 15:49:54 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.0.101:8000
+2025-08-02 15:49:54 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-08-02 15:49:54 [INFO] api.auth: If browser doesn't open, visit this link manually: https://api-v2.upstox.com/login/authorization/dialog?response_type=code&client_id=8d7f1e19-7cc8-492f-85f1-463210eb23ad&redirect_uri=http://localhost:8000
+2025-08-02 15:50:18 [INFO] werkzeug: 127.0.0.1 - - [02/Aug/2025 15:50:18] "[33mGET /?code=I3F9R1 HTTP/1.1[0m" 404 -
+2025-08-02 15:50:18 [INFO] werkzeug: 127.0.0.1 - - [02/Aug/2025 15:50:18] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-08-02 15:51:54 [ERROR] api.auth: OAuth callback timed out (no auth code received).
+2025-08-02 15:51:54 [ERROR] api.auth: Authentication failed: Timed out waiting for OAuth callback.
+2025-08-02 15:51:54 [CRITICAL] __main__: Startup blocked: Timed out waiting for OAuth callback.
+2025-08-02 15:57:55 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 15:57:55 [INFO] api.auth: No valid tokens found, starting fresh authentication...
+2025-08-02 15:57:55 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.0.101:8000
+2025-08-02 15:57:55 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-08-02 15:57:55 [INFO] api.auth: If browser doesn't open, visit this link manually: https://api-v2.upstox.com/login/authorization/dialog?response_type=code&client_id=8d7f1e19-7cc8-492f-85f1-463210eb23ad&redirect_uri=http://localhost:8000
+2025-08-02 15:57:59 [INFO] werkzeug: 127.0.0.1 - - [02/Aug/2025 15:57:59] "[33mGET /?code=7lYQsy HTTP/1.1[0m" 404 -
+2025-08-02 15:59:55 [ERROR] api.auth: OAuth callback timed out (no auth code received).
+2025-08-02 15:59:55 [ERROR] api.auth: Authentication failed: Timed out waiting for OAuth callback.
+2025-08-02 15:59:55 [CRITICAL] __main__: Startup blocked: Timed out waiting for OAuth callback.
+2025-08-02 16:01:04 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 16:01:04 [INFO] api.auth: No valid tokens found, starting fresh authentication...
+2025-08-02 16:01:04 [INFO] api.auth: If browser doesn't open, visit this link manually: https://api-v2.upstox.com/login/authorization/dialog?response_type=code&client_id=8d7f1e19-7cc8-492f-85f1-463210eb23ad&redirect_uri=http://localhost:8000
+2025-08-02 16:01:04 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.0.101:8000
+2025-08-02 16:01:04 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-08-02 16:03:19 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 16:03:19 [INFO] api.auth: No valid tokens found, starting fresh authentication...
+2025-08-02 16:03:19 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.0.101:8000
+2025-08-02 16:03:19 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-08-02 16:03:19 [INFO] api.auth: If browser doesn't open, visit this link manually: https://api-v2.upstox.com/login/authorization/dialog?response_type=code&client_id=8d7f1e19-7cc8-492f-85f1-463210eb23ad&redirect_uri=http://localhost:8000
+2025-08-02 16:03:23 [INFO] werkzeug: 127.0.0.1 - - [02/Aug/2025 16:03:23] "[33mGET /?code=wwu_z5 HTTP/1.1[0m" 404 -
+2025-08-02 16:05:19 [ERROR] api.auth: OAuth callback timed out (no auth code received).
+2025-08-02 16:05:19 [ERROR] api.auth: Authentication failed: Timed out waiting for OAuth callback.
+2025-08-02 16:05:19 [CRITICAL] __main__: Startup blocked: Timed out waiting for OAuth callback.
+2025-08-02 16:05:50 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 16:05:50 [INFO] api.auth: No valid tokens found, starting fresh authentication...
+2025-08-02 16:05:50 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.0.101:8000
+2025-08-02 16:05:50 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-08-02 16:05:50 [INFO] api.auth: If browser doesn't open, visit this link manually: https://api-v2.upstox.com/login/authorization/dialog?response_type=code&client_id=8d7f1e19-7cc8-492f-85f1-463210eb23ad&redirect_uri=http://localhost:8000/callback
+2025-08-02 16:05:53 [INFO] werkzeug: 127.0.0.1 - - [02/Aug/2025 16:05:53] "GET /callback?code=bXrhLY HTTP/1.1" 200 -
+2025-08-02 16:05:54 [INFO] api.auth: Received auth code, exchanging for tokens...
+2025-08-02 16:05:54 [INFO] api.auth: Tokens saved to keyring
+2025-08-02 16:05:54 [INFO] api.auth: Tokens saved to C:\Users\Asus\default_.upstox_pairs_tokens.json
+2025-08-02 16:06:03 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 16:06:03 [INFO] api.auth: Found saved tokens from 2025-08-02T16:05:54.565029
+2025-08-02 16:06:04 [INFO] api.auth: Token validation successful
+2025-08-02 16:06:04 [INFO] api.auth: Using cached access token
+2025-08-02 16:06:23 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 16:06:24 [INFO] api.auth: Found saved tokens from 2025-08-02T16:05:54.565029
+2025-08-02 16:06:24 [INFO] api.auth: Token validation successful
+2025-08-02 16:06:24 [INFO] api.auth: Using cached access token
+2025-08-02 20:08:21 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 20:08:21 [INFO] api.auth: Found saved tokens from 2025-08-02T16:05:54.565029
+2025-08-02 20:08:22 [INFO] api.auth: Token validation successful
+2025-08-02 20:08:22 [INFO] api.auth: Using cached access token
+2025-08-02 20:08:22 [ERROR] api.instrument_key: Failed to load instrument list: HTTP Error 403: Forbidden
+2025-08-02 23:55:52 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 23:55:53 [INFO] api.auth: Found saved tokens from 2025-08-02T16:05:54.565029
+2025-08-02 23:55:53 [INFO] api.auth: Token validation successful
+2025-08-02 23:55:53 [INFO] api.auth: Using cached access token
+2025-08-02 23:55:54 [ERROR] api.instrument_key: Failed to load instrument list: HTTP Error 403: Forbidden
+2025-08-02 23:57:43 [INFO] api.auth: Checking for existing tokens...
+2025-08-02 23:57:44 [INFO] api.auth: Found saved tokens from 2025-08-02T16:05:54.565029
+2025-08-02 23:57:44 [INFO] api.auth: Token validation successful
+2025-08-02 23:57:44 [INFO] api.auth: Using cached access token
+2025-08-02 23:57:45 [ERROR] api.instrument_key: Failed to load instrument list: HTTP Error 403: Forbidden

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Institutional Options Trading Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
+</head>
+<body>
+    <!-- Header Section -->
+    <header class="dashboard-header">
+        <div class="header-left">
+            <div class="logo-section">
+                <h1>OptiTrade Pro</h1>
+                <div class="system-status">
+                    <div class="status-indicator status-healthy" id="systemStatus"></div>
+                    <span class="status-text">System Healthy</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="header-center">
+            <div class="market-status">
+                <div class="market-time">
+                    <span class="time-label">Market Time:</span>
+                    <span class="time-value" id="marketTime">20:02:45 IST</span>
+                </div>
+                <div class="market-feeds">
+                    <span class="feeds-count" id="feedsCount">3 Feeds Connected</span>
+                    <div class="feed-indicators">
+                        <div class="feed-indicator feed-connected" title="NSE Options"></div>
+                        <div class="feed-indicator feed-connected" title="BSE Options"></div>
+                        <div class="feed-indicator feed-connected" title="Index Futures"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="header-right">
+            <div class="user-info">
+                <div class="user-details">
+                    <span class="user-name">Senior Trader</span>
+                    <span class="user-id">trader_001</span>
+                </div>
+                <div class="auth-status">
+                    <span class="auth-indicator auth-active"></span>
+                    <span class="auth-time">6h 45m</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-main">
+        <!-- Strategy Performance Section -->
+        <section class="dashboard-section strategy-section">
+            <div class="section-header">
+                <h2>Strategy Performance</h2>
+                <div class="refresh-controls">
+                    <button class="btn btn--sm btn--secondary" id="refreshStrategies">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+            
+            <div class="strategies-grid" id="strategiesGrid">
+                <!-- Strategy cards will be populated by JavaScript -->
+            </div>
+        </section>
+
+        <!-- Portfolio Overview -->
+        <section class="dashboard-section portfolio-section">
+            <div class="section-header">
+                <h2>Portfolio Overview</h2>
+            </div>
+            
+            <div class="portfolio-metrics">
+                <div class="metric-card">
+                    <div class="metric-label">Total P&L</div>
+                    <div class="metric-value positive" id="totalPnl">₹18,000.00</div>
+                    <div class="metric-change positive" id="totalPnlChange">+₹4,250.00 (24h)</div>
+                </div>
+                
+                <div class="metric-card">
+                    <div class="metric-label">Active Positions</div>
+                    <div class="metric-value" id="totalPositions">24</div>
+                    <div class="metric-change" id="activeStrategies">2 Active Strategies</div>
+                </div>
+                
+                <div class="metric-card">
+                    <div class="metric-label">Margin Utilization</div>
+                    <div class="metric-value" id="marginUsed">₹2,45,000</div>
+                    <div class="metric-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 40.8%"></div>
+                        </div>
+                        <span class="progress-text">40.8% of ₹6,00,000</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card greeks-summary">
+                    <div class="metric-label">Portfolio Greeks</div>
+                    <div class="greeks-grid">
+                        <div class="greek-item">
+                            <span class="greek-label">Δ</span>
+                            <span class="greek-value" id="portfolioDelta">0.02</span>
+                        </div>
+                        <div class="greek-item">
+                            <span class="greek-label">Γ</span>
+                            <span class="greek-value" id="portfolioGamma">0.68</span>
+                        </div>
+                        <div class="greek-item">
+                            <span class="greek-label">Θ</span>
+                            <span class="greek-value negative" id="portfolioTheta">-148.03</span>
+                        </div>
+                        <div class="greek-item">
+                            <span class="greek-label">ν</span>
+                            <span class="greek-value" id="portfolioVega">258.46</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Market Data Section -->
+        <section class="dashboard-section market-data-section">
+            <div class="section-header">
+                <h2>Market Data - NIFTY Options</h2>
+                <div class="market-info">
+                    <span class="spot-price">Spot: ₹19,450.25</span>
+                    <span class="expiry-date">Exp: Aug 14, 2025</span>
+                </div>
+            </div>
+            
+            <div class="option-chain-container">
+                <div class="option-chain-header">
+                    <div class="chain-section">
+                        <span class="section-label">CALL OPTIONS</span>
+                    </div>
+                    <div class="chain-section">
+                        <span class="section-label">STRIKE</span>
+                    </div>
+                    <div class="chain-section">
+                        <span class="section-label">PUT OPTIONS</span>
+                    </div>
+                </div>
+                
+                <div class="option-chain-table" id="optionChain">
+                    <!-- Option chain data will be populated by JavaScript -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Risk Metrics Section -->
+        <section class="dashboard-section risk-section">
+            <div class="section-header">
+                <h2>Risk Management</h2>
+            </div>
+            
+            <div class="risk-metrics-grid">
+                <div class="risk-card">
+                    <div class="risk-label">Value at Risk (1D)</div>
+                    <div class="risk-value">₹25,000</div>
+                    <div class="risk-percentage">4.17% of Portfolio</div>
+                </div>
+                
+                <div class="risk-card">
+                    <div class="risk-label">Expected Shortfall</div>
+                    <div class="risk-value">₹31,250</div>
+                    <div class="risk-percentage">5.21% of Portfolio</div>
+                </div>
+                
+                <div class="risk-card">
+                    <div class="risk-label">Max Drawdown</div>
+                    <div class="risk-value">₹18,500</div>
+                    <div class="risk-percentage">3.08% of Portfolio</div>
+                </div>
+            </div>
+            
+            <div class="risk-limits">
+                <h3>Risk Limits Utilization</h3>
+                <div class="limit-item">
+                    <span class="limit-label">Delta Limit</span>
+                    <div class="limit-bar">
+                        <div class="limit-fill" style="width: 12.5%"></div>
+                    </div>
+                    <span class="limit-value">12.5%</span>
+                </div>
+                
+                <div class="limit-item">
+                    <span class="limit-label">Gamma Limit</span>
+                    <div class="limit-bar">
+                        <div class="limit-fill" style="width: 34.2%"></div>
+                    </div>
+                    <span class="limit-value">34.2%</span>
+                </div>
+                
+                <div class="limit-item">
+                    <span class="limit-label">Vega Limit</span>
+                    <div class="limit-bar">
+                        <div class="limit-fill" style="width: 25.8%"></div>
+                    </div>
+                    <span class="limit-value">25.8%</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Performance Chart Section -->
+        <section class="dashboard-section chart-section">
+            <div class="section-header">
+                <h2>Performance Analytics</h2>
+                <div class="chart-controls">
+                    <select class="form-control chart-timeframe" id="chartTimeframe">
+                        <option value="1D">1D</option>
+                        <option value="1W" selected>1W</option>
+                        <option value="1M">1M</option>
+                        <option value="3M">3M</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="charts-container">
+                <div class="chart-container" style="height: 300px; position: relative;">
+                    <canvas id="pnlChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- System Health Section -->
+        <section class="dashboard-section system-section">
+            <div class="section-header">
+                <h2>System Health</h2>
+                <div class="system-uptime">
+                    <span class="uptime-label">Uptime:</span>
+                    <span class="uptime-value">2d 14h 32m</span>
+                </div>
+            </div>
+            
+            <div class="system-metrics">
+                <div class="system-metric">
+                    <div class="metric-header">
+                        <span class="metric-name">CPU Usage</span>
+                        <span class="metric-percent">23.5%</span>
+                    </div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" style="width: 23.5%"></div>
+                    </div>
+                </div>
+                
+                <div class="system-metric">
+                    <div class="metric-header">
+                        <span class="metric-name">Memory Usage</span>
+                        <span class="metric-percent">67.2%</span>
+                    </div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" style="width: 67.2%"></div>
+                    </div>
+                </div>
+                
+                <div class="system-metric">
+                    <div class="metric-header">
+                        <span class="metric-name">Disk Usage</span>
+                        <span class="metric-percent">45.8%</span>
+                    </div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" style="width: 45.8%"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="system-logs">
+                <h3>Recent System Logs</h3>
+                <div class="logs-container" id="systemLogs">
+                    <!-- Logs will be populated by JavaScript -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- WebSocket Status Indicator -->
+    <div class="websocket-status" id="websocketStatus">
+        <div class="ws-indicator ws-connected"></div>
+        <span class="ws-text">Live Data Connected</span>
+    </div>
+
+    <script src="{{ url_for('static', path='app.js') }}"></script>
+</body>
+</html>

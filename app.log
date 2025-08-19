@@ -1,0 +1,16 @@
+2025-08-17 23:45:37,758 [INFO] src.options_trading.utils.security: Token storage directory: C:\Users\Asus\.options_trading
+2025-08-17 23:45:38,419 [INFO] httpx: HTTP Request: GET https://api.upstox.com/v2/user/profile "HTTP/1.1 200 OK"
+2025-08-17 23:45:38,643 [INFO] src.options_trading.main: Environment: development
+2025-08-17 23:45:38,644 [INFO] src.options_trading.main: Debug mode: True
+2025-08-17 23:46:09,270 [INFO] src.options_trading.utils.security: Token storage directory: C:\Users\Asus\.options_trading
+2025-08-17 23:46:09,702 [INFO] httpx: HTTP Request: GET https://api.upstox.com/v2/user/profile "HTTP/1.1 200 OK"
+2025-08-17 23:46:09,749 [INFO] src.options_trading.main: Environment: development
+2025-08-17 23:46:09,749 [INFO] src.options_trading.main: Debug mode: True
+2025-08-17 23:47:14,068 [INFO] src.options_trading.main: No stored users found - services will initialize after login
+2025-08-17 23:47:14,068 [INFO] src.options_trading.main: Services set to None - will initialize after authentication
+2025-08-17 23:47:14,081 [INFO] src.options_trading.main: Environment: development
+2025-08-17 23:47:14,081 [INFO] src.options_trading.main: Debug mode: True
+2025-08-17 23:48:04,876 [INFO] src.options_trading.main: No stored users found - services will initialize after login
+2025-08-17 23:48:04,876 [INFO] src.options_trading.main: Services set to None - will initialize after authentication
+2025-08-17 23:48:04,882 [INFO] src.options_trading.main: Environment: development
+2025-08-17 23:48:04,882 [INFO] src.options_trading.main: Debug mode: True

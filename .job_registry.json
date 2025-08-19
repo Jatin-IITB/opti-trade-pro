@@ -1,0 +1,82 @@
+{
+  "a89c264e-8def-44dd-89ce-ae009425b4e9": {
+    "id": "a89c264e-8def-44dd-89ce-ae009425b4e9",
+    "symbol": "CDSL",
+    "params": {
+      "expiry_date": null,
+      "option_interval": "3minute",
+      "spot_interval": "3",
+      "days_back": 7,
+      "strikes": 1,
+      "exchange": "NSE_EQ",
+      "number_of_exp": 3
+    },
+    "status": "pending",
+    "files": [],
+    "created_at": null,
+    "completed_at": null,
+    "error": null
+  },
+  "44dc4180-1b04-493a-a2e6-053677ae38bc": {
+    "id": "44dc4180-1b04-493a-a2e6-053677ae38bc",
+    "symbol": "CDSL",
+    "params": {
+      "expiry_date": null,
+      "option_interval": "3minute",
+      "spot_interval": "3",
+      "days_back": 7,
+      "strikes": 1,
+      "exchange": "NSE_EQ",
+      "number_of_exp": 3
+    },
+    "status": "completed",
+    "files": [
+      "FINAL_CDSL_3minute_7d\\CDSL_1520_CE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1540_CE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1540_PE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1520_PE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1740_CE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1760_CE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1760_PE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1740_PE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1480_CE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1500_CE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1500_PE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1480_PE_31_JUL_25.parquet"
+    ],
+    "created_at": null,
+    "completed_at": "2025-08-17T08:56:24.653725Z",
+    "error": null
+  },
+  "c3b4a07c-cb45-475d-a3e8-f4f71c0a3162": {
+    "id": "c3b4a07c-cb45-475d-a3e8-f4f71c0a3162",
+    "symbol": "CDSL",
+    "params": {
+      "expiry_date": null,
+      "option_interval": "3minute",
+      "spot_interval": "3",
+      "days_back": 7,
+      "strikes": 1,
+      "exchange": "NSE_EQ",
+      "number_of_exp": 3
+    },
+    "status": "completed",
+    "files": [
+      "FINAL_CDSL_3minute_7d\\CDSL_1520_CE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1540_CE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1540_PE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1520_PE_29_MAY_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1740_CE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1760_CE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1760_PE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1740_PE_26_JUN_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1480_CE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1500_CE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1500_PE_31_JUL_25.parquet",
+      "FINAL_CDSL_3minute_7d\\CDSL_1480_PE_31_JUL_25.parquet"
+    ],
+    "created_at": null,
+    "completed_at": "2025-08-17T08:58:14.990333Z",
+    "error": null
+  }
+}
