@@ -91,7 +91,7 @@ async def get_available_expiries(
 ):
     """Get available past expiry dates for backtesting using your system"""
     try:
-        from api.expiries import get_expiries
+        from ..tools.expiries import get_expiries
         underlying_key = market_manager.get_underlying_key(symbol, exchange)
         expiries = get_expiries(underlying_key, market_manager.access_token)
         past_expiries = [exp for exp in expiries if exp < date.today().strftime("%Y-%m-%d")]
