@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.env
+.venv/
+venv/
+ENV/
+
+# Logs and debug
+*.log
+logs/
+*.out
+
+# Jupyter/VS Code
+.ipynb_checkpoints/
+.vscode/
+*.code-workspace
+
+# Build artifacts
+dist/
+build/
+
+# Data files
+*.parquet
+*.csv
+*.tsv
+*.sqlite
+*.db
+
+# OS junk
+.DS_Store
+Thumbs.db
