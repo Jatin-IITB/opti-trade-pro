@@ -265,7 +265,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙋‍♂️ Support
 
-- 📧 Email: your.email@example.com
+- 📧 Email: gjatin145@gmail.com
 - 🐛 Issues: [GitHub Issues](https://github.com/yourusername/options-trading-platform/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/options-trading-platform/discussions)
 
