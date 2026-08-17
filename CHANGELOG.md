@@ -4,6 +4,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: SemVer.
 
 ## [3.0.0] — Unreleased (feature/production-rebuild)
 
+### Added (wave 2 — flagship phases 0/1/2/5 seeds)
+- `vol/essvi.py`: SSVI joint calibration across expiries (Gatheral–Jacquier 2014) with
+  structural θ monotonicity and in-fit butterfly penalties; `vol/density.py`
+  Breeden–Litzenberger risk-neutral density gate; `check_durrleman` validation (ADR-012).
+- `data/`: NSE-reality quote filters with per-reason audit stats; schema-versioned Parquet
+  `SnapshotStore`; `CaptureSource` protocol + seeded `SyntheticSource` (ADR-013).
+- `explain/`: PCA surface factors (level/term/skew), daily P&L explain with
+  `explained_fraction` headline metric, expiry-bucketed exposure reports (ADR-014).
+- `audit/`: deterministic groundedness auditor scoring agent claims against journaled
+  engine facts; `mcp_server.py`: engines as journaling MCP tools, optional `[mcp]` extra
+  (ADR-015).
+- Analytics `/surface` endpoint now returns spline + SABR + eSSVI with fit diagnostics;
+  demo CLI runs eSSVI + density gate + a groundedness audit in the journaled run.
+
 ### Added
 - `optitrade` quant core package (numpy/scipy, strictly typed, standalone):
   - `pricing`: vectorised Black-Scholes-Merton + analytic Greeks; Newton–Raphson/Brent

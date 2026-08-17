@@ -27,7 +27,9 @@ from optitrade.greeks.scenario import BookPosition, ScenarioGrid, run_scenario_g
 from optitrade.hedging import BandParams, DeltaHedger, ScalpingParams
 from optitrade.pricing import bs_greeks_at
 from optitrade.risk import RiskContext, RiskEngine, RiskLimits
-from optitrade.vol.arbitrage import validate_surface
+from optitrade.vol.arbitrage import check_durrleman, validate_surface
+from optitrade.vol.density import rnd_gate
+from optitrade.vol.essvi import ESSVISurface
 from optitrade.vol.surface import SABRSurface, VolSurface
 
 logger = logging.getLogger(__name__)
@@ -126,7 +128,14 @@ async def build_surface(chain: ChainIn) -> dict:
         snapshot = _snapshot(chain)
         spline = VolSurface.from_snapshot(snapshot)
         sabr = SABRSurface.from_snapshot(snapshot)
+        essvi = ESSVISurface.from_snapshot(snapshot)
         violations = validate_surface(spline, spot=chain.spot, rate=chain.rate)
+        durrleman = [
+            v
+            for t in essvi.expiries
+            for v in check_durrleman(essvi, float(t), essvi.forward(float(t)))
+        ]
+        density = rnd_gate(essvi, [float(t) for t in essvi.expiries], chain.spot, chain.rate)
     except OptiTradeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -138,6 +147,7 @@ async def build_surface(chain: ChainIn) -> dict:
         f"{t:.6f}": {
             "spline": np.asarray(spline.vol(strikes, t)).tolist(),
             "sabr": np.asarray(sabr.vol(strikes, t)).tolist(),
+            "essvi": np.asarray(essvi.vol(strikes, t)).tolist(),
         }
         for t in expiries
     }
@@ -157,6 +167,11 @@ async def build_surface(chain: ChainIn) -> dict:
             for fit in sabr.slice_fits
         ],
         "worst_sabr_rmse_vol_points": sabr.worst_rmse_vol_points,
+        "essvi_fit": {
+            "rmse_vol_points": essvi.fit.rmse_vol_points if essvi.fit else None,
+            "durrleman_violations": len(durrleman),
+            "density_violations": len(density),
+        },
         "arbitrage_violations": [
             {
                 "kind": v.kind,

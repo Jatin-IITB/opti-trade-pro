@@ -39,7 +39,7 @@ class SurfaceLike(Protocol):
 class Violation:
     """A single detected arbitrage violation."""
 
-    kind: str  # "butterfly" | "calendar"
+    kind: str  # "butterfly" | "calendar" | "durrleman" | "density"
     expiry: float
     strike: float
     magnitude: float
@@ -147,4 +147,57 @@ def validate_surface(
     return violations
 
 
-__all__ = ["SurfaceLike", "Violation", "check_butterfly", "check_calendar", "validate_surface"]
+def check_durrleman(
+    surface_like: SurfaceLike,
+    expiry: float,
+    forward: float,
+    k_grid: np.ndarray | None = None,
+    tol: float = 1e-8,
+) -> list[Violation]:
+    """Durrleman's condition on one total-variance slice.
+
+    A smile ``w(k)`` (total variance at log-moneyness ``k = ln(K/F)``) is free
+    of butterfly arbitrage iff (Durrleman 2004; Gatheral & Jacquier 2014,
+    eq. (2.1))
+
+        g(k) = (1 - k w'/(2w))^2 - (w'^2/4)(1/w + 1/4) + w''/2 >= 0
+
+    everywhere, ``g`` being proportional to the risk-neutral density.
+    Derivatives are taken by central finite differences (``np.gradient``) on a
+    dense ``k`` grid; the two boundary points use one-sided differences and are
+    excluded from flagging. Violations carry ``kind="durrleman"``.
+    """
+    k = np.linspace(-1.5, 1.5, 301) if k_grid is None else np.sort(np.asarray(k_grid, dtype=float))
+    strikes = forward * np.exp(k)
+    vols = np.asarray(surface_like.vol(strikes, expiry), dtype=float)
+    w = np.maximum(vols * vols * expiry, 1e-16)
+    w_p = np.gradient(w, k)
+    w_pp = np.gradient(w_p, k)
+    g = (1.0 - k * w_p / (2.0 * w)) ** 2 - 0.25 * w_p * w_p * (1.0 / w + 0.25) + 0.5 * w_pp
+    violations: list[Violation] = []
+    interior = np.arange(1, k.size - 1)
+    for i in interior[g[interior] < -tol]:
+        strike = float(strikes[i])
+        violations.append(
+            Violation(
+                kind="durrleman",
+                expiry=expiry,
+                strike=strike,
+                magnitude=float(-g[i]),
+                detail=(
+                    f"Durrleman g={float(g[i]):.3e} < 0 at k={float(k[i]):.4g} "
+                    f"(K={strike:.6g}), T={expiry:.6g}"
+                ),
+            )
+        )
+    return violations
+
+
+__all__ = [
+    "SurfaceLike",
+    "Violation",
+    "check_butterfly",
+    "check_calendar",
+    "check_durrleman",
+    "validate_surface",
+]

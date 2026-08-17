@@ -15,11 +15,29 @@ state only test-enforced facts).
 | Engine | What it does | Verified behaviour |
 |---|---|---|
 | **Vol surface** | Newton–Raphson/Brent IV stripping; natural cubic-spline smiles in log-moneyness; per-expiry SABR (Hagan 2002, fixed β, seeded multi-start least-squares); calendar interpolation in total variance; Breeden–Litzenberger butterfly + calendar no-arb validation | SABR round-trip RMSE **< 0.3 vol-pt** on noisy synthetic smiles — `tests/unit/quant/test_sabr.py` |
+| **Surface v2 (eSSVI)** | SSVI with power-law φ calibrated **jointly across all expiries** (Gatheral–Jacquier 2014); θ monotone by construction, butterfly conditions as in-fit penalties; Durrleman g(k) ≥ 0 validation; **risk-neutral density gate** (pdf ≥ 0, ∫≈1, mean ≈ forward); SABR reported as benchmark on every fit | Joint round-trip RMSE **0.076 vol-pt** with **0 Durrleman violations** — `test_essvi.py`; density gate — `test_density.py` |
 | **Greeks** | Three independent methods: vectorised analytic BS, model-agnostic central finite differences, and a from-scratch tape-based **adjoint AD** engine (one backward pass → all first-order Greeks); fully broadcast ΔS×Δσ×Δt scenario revaluation | Methods agree pairwise across a parameter sweep — `test_greeks_cross.py`; **539-cell grid × 50 positions < 200 ms** — `test_scenario.py` (benchmark marker) |
 | **Hedging** | Whalley–Wilmott (1997) no-transaction band (stochastic-control optimal under proportional costs); gamma scalping modulates the band by the realized/implied vol ratio (EWMA RV); Taylor P&L attribution | GBM hedging sim: mean P&L ≈ 0 at realized = implied, hedged P&L tracks theoretical theta; long-gamma earns when RV > IV — `test_hedging_sim.py` |
 | **Risk** | Fail-closed pre-trade engine: Greeks caps, margin sufficiency, drawdown **halt**, concentration **resize**; verdict precedence HALT > REJECT > RESIZE > APPROVE; every decision journaled with plain-English, number-bearing reasons | Property-tested: **no limit-breaching order is ever approved**, including when a check itself crashes — `test_risk.py` |
 
-Plus the connective tissue the engines report through:
+Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/roadmap.md)):
+
+- **Data spine** (`optitrade.data`) — NSE-reality quote filters (crossed books, stale
+  quotes, wide spreads, zero-bid wings) with per-reason audit stats, and a
+  schema-versioned Parquet snapshot store with lossless round-trips
+  (`test_quote_filters.py`, `test_snapshot_store.py`, ADR-013).
+- **P&L explain** (`optitrade.explain`) — daily decomposition into theta carry, gamma vs
+  realized variance, vega per PCA surface factor (level/term/skew), vanna/volga, and
+  residual; `explained_fraction` is the headline metric; expiry-bucketed exposure reports
+  (`test_pnl_explain.py`, `test_factors.py`, `test_bucket_report.py`, ADR-014).
+- **MCP server** (`optitrade.mcp_server`, extra `[mcp]`) — the engines exposed as agent
+  tools (`price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`);
+  every tool call journaled so agent claims have something to cite (ADR-015).
+- **Groundedness audit** (`optitrade.audit`) — deterministic auditor: an agent claim is
+  trusted only if every number it states matches the journal events it cites
+  (`test_groundedness.py`). No LLM in the money path, ever.
+
+And the connective tissue the engines report through:
 
 - **Event journal** (`optitrade.journal`) — append-only JSONL, monotonic sequences,
   correlation IDs; a run replays as evidence (`test_journal.py`).
@@ -80,10 +98,11 @@ Start with [docs/architecture.md](docs/architecture.md), then the ADR index in
 
 ```
 src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker deps)
-  core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/ attribution/ backtest/
+  core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/
+  attribution/ backtest/ data/ explain/ audit/ mcp_server.py
 src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
 tests/unit/quant/         the enforcing tests referenced throughout this README
-docs/adr/                 architecture decision records (ADR-001…)
+docs/adr/                 architecture decision records (ADR-001…015)
 docs/debates/             expert-debate records behind the contested ADRs
 ```
 

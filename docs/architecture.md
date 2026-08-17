@@ -14,7 +14,8 @@ Two packages, one-way dependency (ADR-002):
 │                                                                │
 │  core        types (Greeks, Order, Portfolio…) · errors        │
 │  pricing     BS-Merton · analytic Greeks · implied vol         │
-│  vol         spline smiles · SABR (Hagan) · no-arb checks      │
+│  vol         spline smiles · SABR (Hagan) · eSSVI joint fit    │
+│              · Durrleman/calendar/butterfly · RND gate         │
 │  greeks      finite-diff · adjoint AD tape · scenario grids    │
 │  hedging     WW band · gamma scalper · P&L attribution         │
 │  risk        fail-closed pre-trade checks (ADR-008)            │
@@ -22,6 +23,10 @@ Two packages, one-way dependency (ADR-002):
 │  journal     append-only JSONL event log (ADR-009)             │
 │  attribution Shapley P&L credit                                │
 │  backtest    GBM paths · hedging simulation                    │
+│  data        quote filters · Parquet snapshot store (ADR-013)  │
+│  explain     PCA surface factors · daily P&L explain (ADR-014) │
+│  audit       groundedness auditor for agent claims (ADR-015)   │
+│  mcp_server  engines as journaling MCP tools (ADR-015)         │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,6 +64,12 @@ hedge chain replays as a unit (`EventLog.events_by_correlation`).
 | Risk | 100% of out-of-bound orders blocked (property test) | `tests/unit/quant/test_risk.py` |
 | Journal | replay + sequence recovery | `tests/unit/quant/test_journal.py` |
 | Governance | confident-veto consensus | `tests/unit/quant/test_governance.py` |
+| Surface v2 | eSSVI joint fit, 0 Durrleman violations, RMSE < 0.3 vol-pt | `tests/unit/quant/test_essvi.py` |
+| Surface v2 | risk-neutral density gate (pdf ≥ 0, ∫≈1, mean ≈ F) | `tests/unit/quant/test_density.py` |
+| Data spine | filter semantics + lossless Parquet round-trip | `test_quote_filters.py`, `test_snapshot_store.py` |
+| P&L explain | exact Taylor reconciliation; factor vega additivity | `test_pnl_explain.py`, `test_factors.py` |
+| Audit | fabricated numeric claims rejected with named reasons | `tests/unit/quant/test_groundedness.py` |
+| MCP | tools journal every call; optional-dep import hygiene | `tests/unit/quant/test_mcp_server.py` |
 
 ## Layering rules
 

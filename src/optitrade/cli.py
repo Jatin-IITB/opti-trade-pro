@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 import optitrade
+from optitrade.audit import AgentClaim, GroundednessAuditor
 from optitrade.core import (
     Greeks,
     MarketSnapshot,
@@ -35,7 +36,9 @@ from optitrade.hedging import BandParams, DeltaHedger
 from optitrade.journal import EventLog
 from optitrade.pricing import bs_greeks_at, bs_price
 from optitrade.risk import RiskContext, RiskEngine, RiskLimits
-from optitrade.vol.arbitrage import validate_surface
+from optitrade.vol.arbitrage import check_durrleman, validate_surface
+from optitrade.vol.density import rnd_gate
+from optitrade.vol.essvi import ESSVISurface
 from optitrade.vol.sabr import SABRParams, hagan_implied_vol
 from optitrade.vol.surface import SABRSurface, VolSurface
 
@@ -94,13 +97,30 @@ def demo(journal_dir: Path) -> int:
         f"(checker catches the spline's wing kink at the extrapolation boundary, ADR-005), "
         f"SABR {len(sabr_violations)}"
     )
-    journal.append(
+
+    # Surface engine v2 (ADR-012): joint arb-free calibration + density gate,
+    # with per-expiry SABR as the reported benchmark.
+    essvi = ESSVISurface.from_snapshot(snapshot)
+    essvi_rmse = essvi.fit.rmse_vol_points if essvi.fit is not None else float("nan")
+    durrleman = [
+        v for t in essvi.expiries for v in check_durrleman(essvi, float(t), essvi.forward(float(t)))
+    ]
+    rnd_violations = rnd_gate(essvi, [float(t) for t in essvi.expiries], SPOT, RATE)
+    print(
+        f"[vol] eSSVI joint fit: RMSE {essvi_rmse:.4f} vol-pt vs SABR benchmark "
+        f"{sabr.worst_rmse_vol_points:.4f}; Durrleman violations {len(durrleman)}; "
+        f"density gate {len(rnd_violations)} violations (pdf>=0, integral~1, mean~forward)"
+    )
+    surface_event = journal.append(
         "surface_fit",
         {
             "quotes": len(snapshot.quotes),
             "worst_rmse_vol_points": sabr.worst_rmse_vol_points,
+            "essvi_rmse_vol_points": essvi_rmse,
             "spline_arb_violations": len(spline_violations),
             "sabr_arb_violations": len(sabr_violations),
+            "durrleman_violations": len(durrleman),
+            "density_violations": len(rnd_violations),
         },
     )
 
@@ -258,10 +278,33 @@ def demo(journal_dir: Path) -> int:
     print(
         f"[hedge-sim] rebalances/path {sim.n_rebalances_mean:.1f}, theta tracking {sim.theta_tracking:.2%}"
     )
-    journal.append(
+    hedge_event = journal.append(
         "hedge_sim",
         {"mean_pnl": sim.mean_pnl, "theta_tracking": sim.theta_tracking, "paths": 64},
     )
+
+    # 6) Groundedness audit (ADR-015): agent-style claims are only trusted when
+    # every number they state is found in the journal events they cite.
+    auditor = GroundednessAuditor(journal)
+    claims = (
+        AgentClaim(
+            claim_id="c1",
+            statement=f"The eSSVI joint fit achieved {essvi_rmse:.4f} vol-pt RMSE.",
+            citations=(surface_event.sequence,),
+            values=(("essvi_rmse_vol_points", essvi_rmse),),
+        ),
+        AgentClaim(
+            claim_id="c2",
+            statement="Hedging tracked theta to 0.1% — essentially perfect.",
+            citations=(hedge_event.sequence,),
+            values=(("theta_tracking", 0.001),),  # fabricated number, must fail
+        ),
+    )
+    report = auditor.audit(list(claims))
+    print(f"\n[audit] groundedness: {report.grounded_rate:.0%} of agent claims grounded")
+    for verdict in report.verdicts:
+        status = "grounded" if verdict.grounded else f"REJECTED ({'; '.join(verdict.reasons)})"
+        print(f"[audit]   {verdict.claim_id}: {status}")
 
     n_events = sum(1 for _ in journal.replay())
     print(f"\n[journal] {n_events} events → {journal_dir / (run_id + '.jsonl')}")
