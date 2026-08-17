@@ -37,3 +37,16 @@ build/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime state (event journals, job registry, generated plots)
+.job_registry.json
+runtime_data/
+plots/

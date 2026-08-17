@@ -1,0 +1,150 @@
+"""Static no-arbitrage checks on volatility surfaces.
+
+Butterfly: by Breeden & Litzenberger (1978) the risk-neutral density is
+``e^{rT} d^2C/dK^2``, so call prices off the smile must be convex in strike —
+checked via divided second differences on a dense strike grid.
+
+Calendar: total variance ``w(K, T) = iv^2 T`` must be non-decreasing in ``T``
+at fixed log-moneyness (Gatheral 2006).
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from itertools import pairwise
+from typing import Protocol
+
+import numpy as np
+
+from optitrade.core import ArbitrageViolationError, OptionType
+from optitrade.pricing.black_scholes import ArrayLike, bs_price
+
+_CONVEXITY_TOL = 1e-8
+_CALENDAR_TOL = 1e-10
+
+
+class SurfaceLike(Protocol):
+    """Structural interface both surface classes (and test stubs) satisfy."""
+
+    @property
+    def expiries(self) -> np.ndarray: ...
+
+    def forward(self, expiry: float) -> float: ...
+
+    def vol(self, strike: ArrayLike, expiry: ArrayLike) -> float | np.ndarray: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Violation:
+    """A single detected arbitrage violation."""
+
+    kind: str  # "butterfly" | "calendar"
+    expiry: float
+    strike: float
+    magnitude: float
+    detail: str
+
+
+def check_butterfly(
+    surface_like: SurfaceLike,
+    expiry: float,
+    spot: float,
+    rate: float,
+    strike_grid: np.ndarray | None = None,
+) -> list[Violation]:
+    """Breeden-Litzenberger convexity check at one expiry.
+
+    Calls are priced off the smile on a dense strike grid and the divided
+    second difference (slope increment) must be ``>= -tol``; a negative value
+    is a butterfly-spread arbitrage (negative implied density).
+    """
+    if strike_grid is None:
+        forward = surface_like.forward(expiry)
+        atm_vol = float(np.asarray(surface_like.vol(forward, expiry)))
+        # Cover +-3 ATM standard deviations, at least +-30% log-moneyness.
+        width = max(3.0 * atm_vol * math.sqrt(expiry), 0.3)
+        grid = forward * np.exp(np.linspace(-width, width, 121))
+    else:
+        grid = np.sort(np.asarray(strike_grid, dtype=float))
+    vols = np.asarray(surface_like.vol(grid, expiry), dtype=float)
+    calls = np.asarray(bs_price(spot, grid, expiry, rate, vols, OptionType.CALL), dtype=float)
+    slopes = np.diff(calls) / np.diff(grid)
+    convexity = np.diff(slopes)
+    violations: list[Violation] = []
+    for i in np.flatnonzero(convexity < -_CONVEXITY_TOL):
+        strike = float(grid[i + 1])
+        violations.append(
+            Violation(
+                kind="butterfly",
+                expiry=expiry,
+                strike=strike,
+                magnitude=float(-convexity[i]),
+                detail=(
+                    f"call prices non-convex at K={strike:.6g}, T={expiry:.6g}: "
+                    f"slope increment {float(convexity[i]):.3e}"
+                ),
+            )
+        )
+    return violations
+
+
+def check_calendar(
+    surface_like: SurfaceLike,
+    moneyness_grid: np.ndarray | None = None,
+) -> list[Violation]:
+    """Total variance must be non-decreasing in expiry at fixed log-moneyness."""
+    lm = (
+        np.linspace(-0.3, 0.3, 13)
+        if moneyness_grid is None
+        else np.asarray(moneyness_grid, dtype=float)
+    )
+    expiries = np.asarray(surface_like.expiries, dtype=float)
+    violations: list[Violation] = []
+    for t_near, t_far in pairwise(expiries):
+        k_near = surface_like.forward(float(t_near)) * np.exp(lm)
+        k_far = surface_like.forward(float(t_far)) * np.exp(lm)
+        v_near = np.asarray(surface_like.vol(k_near, float(t_near)), dtype=float)
+        v_far = np.asarray(surface_like.vol(k_far, float(t_far)), dtype=float)
+        w_near = v_near * v_near * t_near
+        w_far = v_far * v_far * t_far
+        for j in np.flatnonzero(w_far < w_near - _CALENDAR_TOL):
+            violations.append(
+                Violation(
+                    kind="calendar",
+                    expiry=float(t_far),
+                    strike=float(k_far[j]),
+                    magnitude=float(w_near[j] - w_far[j]),
+                    detail=(
+                        f"total variance falls from {float(w_near[j]):.6g} (T={t_near:.6g}) "
+                        f"to {float(w_far[j]):.6g} (T={t_far:.6g}) at lm={float(lm[j]):.4g}"
+                    ),
+                )
+            )
+    return violations
+
+
+def validate_surface(
+    surface: SurfaceLike,
+    spot: float,
+    rate: float,
+    raise_on_violation: bool = False,
+) -> list[Violation]:
+    """Run butterfly checks at every quoted expiry plus the calendar check.
+
+    Returns all violations; if ``raise_on_violation`` is set and any exist,
+    raises :class:`ArbitrageViolationError` listing them.
+    """
+    violations: list[Violation] = []
+    for expiry in np.asarray(surface.expiries, dtype=float):
+        violations.extend(check_butterfly(surface, float(expiry), spot, rate))
+    violations.extend(check_calendar(surface))
+    if raise_on_violation and violations:
+        lines = "; ".join(v.detail for v in violations)
+        raise ArbitrageViolationError(
+            f"surface fails static no-arbitrage with {len(violations)} violation(s): {lines}"
+        )
+    return violations
+
+
+__all__ = ["SurfaceLike", "Violation", "check_butterfly", "check_calendar", "validate_surface"]

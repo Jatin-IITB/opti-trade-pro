@@ -1,280 +1,99 @@
-# README.md
-# 🚀 Options Trading Platform v2.0
+# OptiTrade Pro — Derivatives Pricing & Risk Engine
 
-A modern, production-ready options trading platform built with FastAPI, featuring Black-Scholes calculations, gamma scalping strategies, and real-time market data integration with Upstox.
+A production-grade options analytics stack in two layers:
 
-## ✨ Features
+- **`optitrade`** — a standalone quant core (numpy/scipy only, strictly typed, event-journaled):
+  vol surfaces, Greeks, hedging, and pre-trade risk.
+- **`options_trading`** — a FastAPI platform (Upstox OAuth, market data, dashboards) that
+  consumes the core through thin adapters.
 
-### 🔐 **Authentication & Security**
-- OAuth2 integration with Upstox
-- Secure token storage with keyring support
-- Encrypted fallback storage
-- Multi-user support
-- Automatic token refresh
+Every quantitative claim below names the test that enforces it (CLAUDE.md rule 8 — docs
+state only test-enforced facts).
 
-### 📊 **Market Data & Analytics**
-- Real-time options and spot data from Upstox
-- Black-Scholes pricing and Greeks calculation
-- Implied volatility calculation
-- Realized volatility analysis (Garman-Klass & Parkinson)
-- Historical data processing
+## The four engines
 
-### 🎯 **Trading Strategies**
-- Gamma scalping framework
-- Strike selection algorithms
-- Risk management tools
-- Brokerage and margin calculations
+| Engine | What it does | Verified behaviour |
+|---|---|---|
+| **Vol surface** | Newton–Raphson/Brent IV stripping; natural cubic-spline smiles in log-moneyness; per-expiry SABR (Hagan 2002, fixed β, seeded multi-start least-squares); calendar interpolation in total variance; Breeden–Litzenberger butterfly + calendar no-arb validation | SABR round-trip RMSE **< 0.3 vol-pt** on noisy synthetic smiles — `tests/unit/quant/test_sabr.py` |
+| **Greeks** | Three independent methods: vectorised analytic BS, model-agnostic central finite differences, and a from-scratch tape-based **adjoint AD** engine (one backward pass → all first-order Greeks); fully broadcast ΔS×Δσ×Δt scenario revaluation | Methods agree pairwise across a parameter sweep — `test_greeks_cross.py`; **539-cell grid × 50 positions < 200 ms** — `test_scenario.py` (benchmark marker) |
+| **Hedging** | Whalley–Wilmott (1997) no-transaction band (stochastic-control optimal under proportional costs); gamma scalping modulates the band by the realized/implied vol ratio (EWMA RV); Taylor P&L attribution | GBM hedging sim: mean P&L ≈ 0 at realized = implied, hedged P&L tracks theoretical theta; long-gamma earns when RV > IV — `test_hedging_sim.py` |
+| **Risk** | Fail-closed pre-trade engine: Greeks caps, margin sufficiency, drawdown **halt**, concentration **resize**; verdict precedence HALT > REJECT > RESIZE > APPROVE; every decision journaled with plain-English, number-bearing reasons | Property-tested: **no limit-breaching order is ever approved**, including when a check itself crashes — `test_risk.py` |
 
-### 🏗️ **Modern Architecture**
-- FastAPI with async support
-- Pydantic models for data validation
-- Comprehensive error handling
-- Structured logging
-- Type hints throughout
-- 90%+ test coverage
+Plus the connective tissue the engines report through:
 
-## 🚀 Quick Start
+- **Event journal** (`optitrade.journal`) — append-only JSONL, monotonic sequences,
+  correlation IDs; a run replays as evidence (`test_journal.py`).
+- **Governance** (`optitrade.governance`) — every trade proposal is debated by a
+  deterministic expert panel (risk officer / strategy / execution) with confidence-weighted
+  consensus and a confident-veto rule; dissents preserved in the journaled decision record
+  (`test_governance.py`). LLM experts are an optional extra (`pip install ".[agentic]"`).
+- **Attribution** (`optitrade.attribution`) — exact Shapley values for fair P&L credit
+  across strategies (`test_shapley.py`).
 
-### Prerequisites
-- Python 3.11 or higher
-- Upstox Developer Account ([Get API Keys](https://developer.upstox.com/))
-- Redis (optional, for caching)
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/options-trading-platform.git
-   cd options-trading-platform
-   ```
-
-2. **Create virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -e .
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your Upstox API credentials
-   ```
-
-5. **Install pre-commit hooks (optional)**
-   ```bash
-   pre-commit install
-   ```
-
-### Configuration
-
-Edit your `.env` file with your Upstox credentials:
-
-```env
-UPSTOX_API_KEY=your_api_key_here
-UPSTOX_SECRET_KEY=your_secret_key_here
-OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
-SECRET_KEY=your-secure-secret-key
-```
-
-### Running the Application
+## Quick start
 
 ```bash
-# Start the FastAPI server
-uvicorn src.options_trading.main:app --reload --host 0.0.0.0 --port 8000
+uv venv --python 3.12 && uv pip install -e ".[dev]"   # or: pip install -e ".[dev]"
+
+optitrade demo         # end-to-end synthetic run: chain → surface → Greeks →
+                       # debate → risk review → hedging sim, journaled to ./runtime_data
+
+pytest -q              # full suite (deterministic, seeded)
+pytest -q -m benchmark # latency targets (run locally; excluded on shared CI runners)
 ```
 
-The API will be available at `http://localhost:8000`
-- API Documentation: `http://localhost:8000/docs`
-- Alternative Docs: `http://localhost:8000/redoc`
-
-## 📖 API Documentation
-
-### Authentication Endpoints
-
-- `GET /auth/login` - Initiate OAuth2 login
-- `GET /auth/callback` - Handle OAuth2 callback
-- `GET /auth/status` - Check authentication status
-- `POST /auth/refresh` - Refresh access token
-- `POST /auth/logout` - Logout user
-
-### Market Data Endpoints
-
-- `GET /market/instruments` - Get instrument information
-- `GET /market/expiries` - Get available expiry dates
-- `GET /market/contracts` - Get option contracts
-- `GET /market/candles` - Get historical OHLCV data
-
-## 🧪 Testing
+Run the platform (needs Upstox credentials in `.env`, see `.env.example`):
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=src/options_trading --cov-report=html
-
-# Run specific test categories
-pytest -m "unit"          # Unit tests only
-pytest -m "integration"   # Integration tests only
-pytest -m "auth"          # Authentication tests only
+uvicorn options_trading.main:app --reload --port 8000
+# docs at http://localhost:8000/docs — quant endpoints under /api/v1/analytics/*
 ```
 
-## 📁 Project Structure
-
-```
-src/options_trading/
-├── __init__.py
-├── models/              # Pydantic models
-│   ├── auth.py         # Authentication models
-│   └── market.py       # Market data models
-├── services/           # Business logic
-│   ├── auth_service.py # Authentication service
-│   └── market_service.py # Market data service
-├── api/               # FastAPI routes
-│   └── routes/
-│       ├── auth.py    # Auth endpoints
-│       └── market.py  # Market endpoints
-├── config/            # Configuration
-│   └── settings.py    # Pydantic settings
-└── utils/             # Utilities
-    ├── exceptions.py  # Custom exceptions
-    └── security.py    # Security utilities
-```
-
-## 🔧 Development
-
-### Code Quality
-
-This project uses several tools to maintain code quality:
-
-- **Black** - Code formatting
-- **isort** - Import sorting
-- **flake8** - Linting
-- **mypy** - Type checking
-- **pre-commit** - Git hooks
-
-Run quality checks:
-```bash
-# Format code
-black src/ tests/
-
-# Sort imports
-isort src/ tests/
-
-# Lint code
-flake8 src/ tests/
-
-# Type checking
-mypy src/
-```
-
-### Development Environment
+Docker:
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Set up pre-commit hooks
-pre-commit install
-
-# Run pre-commit on all files
-pre-commit run --all-files
+docker build -t optitrade-pro . && docker run -p 8000:8000 --env-file .env optitrade-pro
 ```
 
-## 🐳 Docker Support
+## Analytics API (platform → core adapters)
 
-```bash
-# Build image
-docker build -t options-trading-platform .
+- `POST /api/v1/analytics/surface` — chain in, spline+SABR surface out, with per-expiry SABR
+  params, fit RMSE, and any no-arbitrage violations
+- `POST /api/v1/analytics/greeks` — book in, aggregate + per-position Greeks out
+- `POST /api/v1/analytics/scenarios` — ΔS×Δσ×Δt P&L cube with worst/best cells and timing
+- `POST /api/v1/analytics/hedge/decide` — Whalley–Wilmott band decision with rationale
+- `POST /api/v1/analytics/risk/review` — fail-closed pre-trade verdict with per-check reasons
 
-# Run container
-docker run -p 8000:8000 --env-file .env options-trading-platform
+## How decisions are made (in the code and about the code)
 
-# Use docker-compose
-docker-compose up -d
+The same debate → consensus → recorded-decision mechanism runs at two timescales:
+
+- **Runtime**: `DebatePanel` + `RiskEngine` journal every trade decision with reasons and
+  correlation IDs (ADR-008, ADR-009, ADR-010).
+- **Engineering**: contested design choices get a debate record in `docs/debates/` and land
+  as a numbered ADR in `docs/adr/` (ADR-001; process in `docs/governance.md`).
+
+Start with [docs/architecture.md](docs/architecture.md), then the ADR index in
+[docs/adr/](docs/adr/). Engineering standards: [CLAUDE.md](CLAUDE.md).
+
+## Project structure
+
+```
+src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker deps)
+  core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/ attribution/ backtest/
+src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
+tests/unit/quant/         the enforcing tests referenced throughout this README
+docs/adr/                 architecture decision records (ADR-001…)
+docs/debates/             expert-debate records behind the contested ADRs
 ```
 
-## 📊 Monitoring & Logging
+## Conventions
 
-The platform includes comprehensive logging and monitoring:
+Year-fraction time (ACT/365), continuously compounded rates, decimal vols, vega per unit
+vol, theta per year, signed quantities (ADR-003). Toolchain: ruff + tiered mypy + pytest
+with deterministic seeds (ADR-004). Conventional Commits; branch from `main`.
 
-- **Structured logging** with JSON format
-- **Prometheus metrics** endpoint at `/metrics`
-- **Health check** endpoint at `/health`
-- **Request tracing** with correlation IDs
+## License & disclaimer
 
-## 🔒 Security Features
-
-- **Token encryption** with Fernet
-- **Keyring integration** for secure storage
-- **Rate limiting** on API endpoints
-- **Input validation** with Pydantic
-- **SQL injection protection**
-- **CORS configuration**
-
-## 📈 Performance
-
-- **Async/await** throughout for high concurrency
-- **Connection pooling** for database and Redis
-- **Caching** with Redis for market data
-- **Background tasks** for data processing
-- **Compression** for data storage
-
-## 🚀 Deployment
-
-### Production Checklist
-
-- [ ] Set `ENVIRONMENT=production` in `.env`
-- [ ] Use strong `SECRET_KEY`
-- [ ] Configure HTTPS redirect URI
-- [ ] Set up production database
-- [ ] Configure Redis cluster
-- [ ] Enable logging to external service
-- [ ] Set up monitoring and alerts
-- [ ] Configure backup strategy
-
-### Environment Variables
-
-See `.env.example` for all available configuration options.
-
-## 📚 Documentation
-
-- [API Documentation](docs/api.md)
-- [Authentication Guide](docs/auth.md)
-- [Market Data Guide](docs/market-data.md)
-- [Trading Strategies](docs/strategies.md)
-- [Deployment Guide](docs/deployment.md)
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Run quality checks
-6. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙋‍♂️ Support
-
-- 📧 Email: gjatin145@gmail.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/options-trading-platform/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/options-trading-platform/discussions)
-
-## 🏆 Acknowledgments
-
-- [Upstox](https://upstox.com/) for the trading API
-- [FastAPI](https://fastapi.tiangolo.com/) for the web framework
-- [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
-
----
-
-**⚠️ Disclaimer**: This software is for educational and research purposes only. Trading in financial markets involves substantial risk. Always consult with a qualified financial advisor before making investment decisions.
+MIT. This software is for research and education. Options trading involves substantial
+risk; nothing here is investment advice.

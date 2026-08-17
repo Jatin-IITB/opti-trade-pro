@@ -1,10 +1,16 @@
 # api/contracts.py
-import requests
 import pandas as pd
+import requests
+
 from ...config.settings import settings
 from ...utils.exceptions import APIError, DataQualityError
-url=settings.upstox_expired_contracts_url
-def fetch_expired_option_contracts_df(instrument_key: str, expiry_date: str, access_token: str) -> pd.DataFrame:
+
+url = settings.upstox_expired_contracts_url
+
+
+def fetch_expired_option_contracts_df(
+    instrument_key: str, expiry_date: str, access_token: str
+) -> pd.DataFrame:
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {access_token}",
@@ -22,8 +28,13 @@ def fetch_expired_option_contracts_df(instrument_key: str, expiry_date: str, acc
     df = pd.DataFrame(data)
 
     essential = [
-        "instrument_key", "trading_symbol", "expiry", "strike_price",
-        "instrument_type", "underlying_key", "weekly"
+        "instrument_key",
+        "trading_symbol",
+        "expiry",
+        "strike_price",
+        "instrument_type",
+        "underlying_key",
+        "weekly",
     ]
     for c in essential:
         if c not in df.columns:

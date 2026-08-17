@@ -1,13 +1,14 @@
-import logging
 import asyncio
-from typing import Optional
-from fastapi import Query
+import logging
+
 import pandas as pd
+
 from ...config.settings import settings
+
 INSTRUMENT_KEY_URL = settings.instrument_key_url
 logger = logging.getLogger(__name__)
 
-_instruments_df: Optional[pd.DataFrame] = None
+_instruments_df: pd.DataFrame | None = None
 _load_lock = asyncio.Lock()
 
 
@@ -20,7 +21,7 @@ async def _read_csv_async(url: str) -> pd.DataFrame:
     return await asyncio.to_thread(_read)
 
 
-async def _load_instruments_df_async(force_reload: bool = False) -> Optional[pd.DataFrame]:
+async def _load_instruments_df_async(force_reload: bool = False) -> pd.DataFrame | None:
     global _instruments_df
 
     # Fast path: already loaded and not forcing reload
@@ -57,9 +58,7 @@ async def _load_instruments_df_async(force_reload: bool = False) -> Optional[pd.
                     pass
 
             _instruments_df = df
-            logger.info(
-                f"Loaded instruments: rows={len(df)}, exchanges={df['exchange'].nunique()}"
-            )
+            logger.info(f"Loaded instruments: rows={len(df)}, exchanges={df['exchange'].nunique()}")
             return _instruments_df
 
         except Exception as e:
@@ -68,7 +67,7 @@ async def _load_instruments_df_async(force_reload: bool = False) -> Optional[pd.
             return None
 
 
-async def get_instrument_key_async(trading_symbol: str, exchange: str) -> Optional[str]:
+async def get_instrument_key_async(trading_symbol: str, exchange: str) -> str | None:
     df = await _load_instruments_df_async()
     if df is None or df.empty:
         logger.warning("Instrument dataset unavailable or empty")
@@ -89,9 +88,7 @@ async def get_instrument_key_async(trading_symbol: str, exchange: str) -> Option
     if filtered.empty:
         for col in ("tradingsymbol", "symbol", "name"):
             if col in subset.columns:
-                candidates = subset[
-                    subset[col].astype(str).str.upper().str.contains(ts, na=False)
-                ]
+                candidates = subset[subset[col].astype(str).str.upper().str.contains(ts, na=False)]
                 if not candidates.empty:
                     filtered = candidates
                     break
@@ -114,8 +111,10 @@ async def get_instrument_key_async(trading_symbol: str, exchange: str) -> Option
 
 # Optional: sync-compatible wrappers if needed by existing code paths
 
-def _load_instruments_df() -> Optional[pd.DataFrame]:
+
+def _load_instruments_df() -> pd.DataFrame | None:
     return asyncio.run(_load_instruments_df_async())
 
-def get_instrument_key(trading_symbol: str, exchange: str) -> Optional[str]:
+
+def get_instrument_key(trading_symbol: str, exchange: str) -> str | None:
     return asyncio.run(get_instrument_key_async(trading_symbol, exchange))

@@ -1,19 +1,14 @@
-# Options Trading Platform - Modern Architecture
-# pyproject.toml
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "options-trading-platform"
-version = "2.0.0"
-description = "Modern options trading platform with Black-Scholes calculations and gamma scalping"
-readme = "README.md"
-license = {text = "MIT"}
-authors = [
-    {name = "Your Name", email = "your.email@example.com"},
-]
+name = "optitrade-pro"
+version = "3.0.0"
+description = "OptiTrade Pro — derivatives pricing & risk engine: vol surfaces (spline + SABR), Greeks (analytic, finite-diff, adjoint AD), delta-neutral hedging with gamma scalping, and fail-closed pre-trade risk controls"
+readme = "Readme.md"
+license = { text = "MIT" }
+authors = [{ name = "Jatin Gupta", email = "gjatin145@gmail.com" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
@@ -23,192 +18,142 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 requires-python = ">=3.11"
+# Core quant engine (optitrade) needs only numpy/scipy; the rest serves the
+# options_trading platform layer (FastAPI app + Upstox integration).
 dependencies = [
-    # Core dependencies
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    
-    # Data processing
-    "pandas>=2.1.0",
-    "numpy>=1.25.0",
+    "numpy>=1.26.0",
     "scipy>=1.11.0",
-    "polars>=0.20.0",  # High-performance alternative to pandas
-    
-    # HTTP clients
-    "httpx>=0.25.0",
+    "pandas>=2.1.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "httpx>=0.27.0",
     "requests>=2.31.0",
-    
-    # Database
-    "sqlalchemy[asyncio]>=2.0.0",
-    "asyncpg>=0.29.0",  # PostgreSQL async driver
-    
-    # Caching and queuing
-    "redis>=5.0.0",
-    "celery>=5.3.0",
-    
-    # Security and auth
-    "python-jose[cryptography]>=3.3.0",
-    "passlib[bcrypt]>=1.7.4",
-    "python-multipart>=0.0.6",
-    
-    # Configuration
-    "python-dotenv>=1.0.0",
-    "dynaconf>=3.2.0",
-    
-    # Logging and monitoring
-    "structlog>=23.2.0",
-    "prometheus-client>=0.19.0",
-    
-    # Time and timezone
-    "pytz>=2023.3",
-    "python-dateutil>=2.8.2",
-    
-    # File formats
-    "pyarrow>=14.0.0",
-    
-    # Optional keyring support
+    "aiofiles>=23.2.0",
+    "cryptography>=42.0.0",
     "keyring>=24.3.0",
+    "psutil>=5.9.0",
+    "pytz>=2023.3",
+    "jinja2>=3.1.0",
+    "itsdangerous>=2.1.0",
+    "pyarrow>=14.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    # Testing
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
-    "httpx>=0.25.0",  # For testing FastAPI
-    
-    # Code quality
-    "black>=23.11.0",
-    "isort>=5.12.0",
-    "flake8>=6.1.0",
-    "mypy>=1.7.0",
+    "hypothesis>=6.98.0",
+    "ruff>=0.4.0",
+    "mypy>=1.9.0",
     "pre-commit>=3.6.0",
-    
-    # Documentation
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.4.0",
-    "mkdocstrings[python]>=0.24.0",
-    
-    # Development tools
-    "ipython>=8.18.0",
-    "jupyter>=1.0.0",
 ]
-
-ml = [
-    # Machine learning
-    "scikit-learn>=1.3.0",
-    "mlflow>=2.8.0",
-    "optuna>=3.4.0",
-]
-
-monitoring = [
-    # Advanced monitoring
-    "sentry-sdk[fastapi]>=1.38.0",
-    "jaeger-client>=4.8.0",
-    "opentelemetry-api>=1.21.0",
-]
-
-all = [
-    "options-trading-platform[dev,ml,monitoring]"
-]
-
-[project.urls]
-Homepage = "https://github.com/yourusername/options-trading-platform"
-Documentation = "https://yourusername.github.io/options-trading-platform/"
-Repository = "https://github.com/yourusername/options-trading-platform.git"
-"Bug Tracker" = "https://github.com/yourusername/options-trading-platform/issues"
+# Optional LLM-backed debate experts (governance module works without this;
+# rule-based experts are the default). See docs/adr/010.
+agentic = ["dspy>=2.5.0"]
+# Optional MCP server exposing the engines as agent tools (ADR-015).
+mcp = ["mcp>=1.2.0"]
 
 [project.scripts]
-options-trading = "options_trading.cli:main"
+optitrade = "optitrade.cli:main"
+optitrade-mcp = "optitrade.mcp_server:main"
+
+[project.urls]
+Repository = "https://github.com/jatin-gupta/opti-trade-pro"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/options_trading"]
+packages = ["src/optitrade", "src/options_trading"]
 
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
-known_first_party = ["options_trading"]
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "SIM108", # ternary is not always clearer
+]
+# Quant output legitimately uses Greek letters and math symbols in strings.
+allowed-confusables = ["σ", "Γ", "Δ", "θ", "ρ", "ν", "α", "λ", "η", "×", "−", "μ"]
+
+[tool.ruff.lint.per-file-ignores]
+# Platform-layer debt, parked per ADR-004's incremental-tightening policy:
+# B008 is FastAPI's Depends-in-default idiom; the rest are legacy style issues
+# (exception chaining, late imports, unused locals, str-Enum) fixed as each
+# module is refactored. Do not add rules here for new code.
+"src/options_trading/**" = [
+    "B008",
+    "B904",
+    "E402",
+    "E731",
+    "F841",
+    "RUF006",
+    "RUF059",
+    "SIM102",
+    "SIM105",
+    "UP042",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["optitrade", "options_trading"]
 
 [tool.mypy]
-python_version = "3.11"
-warn_return_any = true
+# numpy >= 2.5 stubs use PEP 695 `type` statements, so 3.12 is the checking floor.
+python_version = "3.12"
 warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+# src/__init__.py would otherwise give files a second module name (src.optitrade.*)
+# clashing with the editable install's optitrade.*.
+explicit_package_bases = true
+mypy_path = ["src"]
+
+# The quant core is held to strict typing.
+[[tool.mypy.overrides]]
+module = "optitrade.*"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
+warn_return_any = true
+
+# Platform layer predates the typing standard; tightened incrementally (ADR-004).
+[[tool.mypy.overrides]]
+module = "options_trading.*"
+ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = [
-    "keyring.*",
-    "scipy.*",
-    "pandas.*",
-]
+module = ["keyring.*", "scipy.*", "pandas.*", "psutil.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-minversion = "7.0"
-addopts = "-ra -q --strict-markers --cov=options_trading --cov-report=term-missing --cov-report=html"
+minversion = "8.0"
+addopts = "-ra --strict-markers"
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
+asyncio_mode = "auto"
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-    "auth: marks tests related to authentication",
-    "api: marks tests related to API endpoints",
-    "calculations: marks tests related to financial calculations",
+    "slow: long-running test (deselect with '-m \"not slow\"')",
+    "integration: uses real services or network",
+    "unit: fast, isolated unit test",
+    "benchmark: performance-target test (scenario-grid latency, etc.)",
+    "auth: authentication-related test",
 ]
 
 [tool.coverage.run]
-source = ["src/options_trading"]
-omit = [
-    "*/tests/*",
-    "*/test_*.py",
-    "*/__pycache__/*",
-]
+source = ["src/optitrade", "src/options_trading"]
+omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
     "raise NotImplementedError",
-    "if 0:",
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
+    "if TYPE_CHECKING:",
 ]

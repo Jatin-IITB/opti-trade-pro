@@ -5,10 +5,8 @@ Production-grade application settings for Options Trading.
 - Merges API endpoints, defaults, risk params, token management, and logging.
 """
 
-import os
-from pathlib import Path
 from functools import lru_cache
-from typing import Optional
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,7 +49,6 @@ class Settings(BaseSettings):
     market_data_log_file: str = Field(default="market_data_stream.log")
     trade_execution_log_file: str = Field(default="trade_execution.log")
 
-   
     # -------------------------------------------------------------------------
     # Upstox API Configuration
     # -------------------------------------------------------------------------
@@ -68,15 +65,11 @@ class Settings(BaseSettings):
     upstox_option_candles_url: str = Field(
         default="https://api.upstox.com/v2/expired-instruments/historical-candle"
     )
-    upstox_spot_candles_url: str = Field(
-        default="https://api.upstox.com/v3/historical-candle"
-    )
+    upstox_spot_candles_url: str = Field(default="https://api.upstox.com/v3/historical-candle")
     instrument_key_url: str = Field(
         default="https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"
     )
-    upstox_auth_url: str = Field(
-        default="https://api.upstox.com/v2/login/authorization/token"
-    )
+    upstox_auth_url: str = Field(default="https://api.upstox.com/v2/login/authorization/token")
     upstox_profile_url: str = Field(default="https://api.upstox.com/v2/user/profile")
     upstox_charges_url: str = Field(default="https://api.upstox.com/v2/charges/brokerage")
     upstox_margin_url: str = Field(default="https://api.upstox.com/v2/charges/margin")
@@ -127,11 +120,11 @@ class Settings(BaseSettings):
     max_concurrent_requests: int = Field(default=5)
     api_calls_per_minute: int = Field(default=50)
     rate_limit_buffer_seconds: float = Field(default=1.2)
-    
+
     # -------------------------------------------------------------------------
     # Database & Redis
     # -------------------------------------------------------------------------
-    database_url: Optional[str] = Field(default=None)
+    database_url: str | None = Field(default=None)
     redis_url: str = Field(default="redis://localhost:6379/0")
     redis_timeout: int = Field(default=5)
 
@@ -145,11 +138,13 @@ class Settings(BaseSettings):
     exchange: str = Field(default="NSE_INDEX")
     trading_symbol: str = Field(default="Nifty 50")
     expiry_start_index: int = Field(default=0)
-    expiry_end_index: Optional[int] = Field(default=None)
+    expiry_end_index: int | None = Field(default=None)
     latest_expiry: int = Field(default=5)
     default_trim_hours: int = Field(default=2)
     OUT_BASE_PREFIX: str = Field(default="FINAL", description="Output base folder prefix")
-    JOB_REGISTRY_PATH: str = Field(default=".job_registry.json", description="Job registry path (JSON)")
+    JOB_REGISTRY_PATH: str = Field(
+        default=".job_registry.json", description="Job registry path (JSON)"
+    )
     # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------
@@ -159,7 +154,7 @@ class Settings(BaseSettings):
     rv_window_3min: int = Field(default=130)  # ≈ 1.5 trading days
     rv_buffer_weeks: int = Field(default=2)
     min_rv_coverage: float = Field(default=0.8)
-    FALLBACK_BROKERAGE_CHARGE: float=Field(default=82.89)
+    FALLBACK_BROKERAGE_CHARGE: float = Field(default=82.89)
     # FALLBACK_MARGIN_REQUIREMENT
     # -------------------------------------------------------------------------
     # Cache
@@ -216,7 +211,7 @@ class Settings(BaseSettings):
         return self.environment == "testing"
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """Get application settings (cached)."""
     return Settings()
