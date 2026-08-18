@@ -4,6 +4,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: SemVer.
 
 ## [3.0.0] — Unreleased (feature/production-rebuild)
 
+### Added (wave 3 — capture, strategy, walk-forward, paper desk)
+- `options_trading` capture: `UpstoxCaptureSource` (CaptureSource protocol over live
+  chains), `/api/v1/capture/run` + `/capture/history`, clean-only Parquet persistence,
+  `snapshot_store_path` setting.
+- `strategy/`: `Strategy` protocol shared by backtester and desk; `VRPStrategy`
+  (IV−RV gate, regime filters, numbered theses); `IndianOptionsCostModel` with per-fill
+  `CostBreakdown` (ADR-016/017); `vol/realized.py` (Garman–Klass, Parkinson, close-close).
+- `backtest/`: `SyntheticVRPMarket` replay, `run_backtest` (fail-closed risk in the loop,
+  spread + cost fills, daily WW hedging), `run_walk_forward` with stitched OOS P&L and
+  deflated Sharpe (Bailey–López de Prado 2014, n_trials counted by the harness).
+- `desk/`: `run_daily_cycle` (strategy → debate → risk → paper fill → hedge → journal),
+  file-based `KillSwitch` auto-engaged by drawdown HALT, self-auditing `SurfaceAuditor` +
+  `PostMortemAnalyst` (ADR-018); `optitrade cycle` CLI paper-desk command.
+- Governance: ADR-016..018, backtest-methodology debate record.
+
 ### Added (wave 2 — flagship phases 0/1/2/5 seeds)
 - `vol/essvi.py`: SSVI joint calibration across expiries (Gatheral–Jacquier 2014) with
   structural θ monotonicity and in-fit butterfly penalties; `vol/density.py`

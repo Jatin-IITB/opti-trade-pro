@@ -12,7 +12,19 @@ and propose only.**
 - Hedging: Whalley–Wilmott bands + RV/IV gamma scalping + GBM sim (ADR-007)
 - Risk: fail-closed pre-trade engine (ADR-008); journal (ADR-009); debate panel (ADR-010)
 
-## Phases ahead
+## Phase status (2026-08-18)
+
+| Phase | State |
+|---|---|
+| 0 Data pipeline | **Built** — filters + Parquet store + Upstox capture API (`/api/v1/capture/run`); remaining: scheduled unattended capture on market days |
+| 1 Joint surface | **Built** — eSSVI joint fit, Durrleman + RND gates, SABR benchmark (ADR-012) |
+| 2 AAD + P&L explain | **Partial** — P&L explain + PCA factors + bucket reports built; JAX AAD revisit trigger still per ADR-006 |
+| 3 Strategy + backtest | **Built on synthetic** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); needs real captured history |
+| 4 Paper loop | **Skeleton built** — `run_daily_cycle` + kill switch + `optitrade cycle` (ADR-018); remaining: scheduler, live capture wiring, daily report |
+| 5 Agent layer | **Primitives built** — MCP server, groundedness auditor, 2 deterministic analysts; remaining: Regime Analyst, Risk Officer NL queries, LLM adapters |
+| 6 Research loop | Not started (gated on 3-5) |
+
+## Phase detail
 
 0. **Data pipeline** — chain-snapshot capture from Upstox with quote filtering → Parquet;
    replayable market history.

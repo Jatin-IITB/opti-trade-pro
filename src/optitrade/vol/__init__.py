@@ -17,6 +17,7 @@ from optitrade.vol.essvi import (
     essvi_total_variance,
     essvi_vol,
 )
+from optitrade.vol.realized import close_to_close_vol, garman_klass_vol, parkinson_vol
 from optitrade.vol.sabr import SABRFit, SABRParams, calibrate_sabr, hagan_implied_vol
 from optitrade.vol.surface import SABRSurface, SmileSlice, VolSurface
 
@@ -37,10 +38,13 @@ __all__ = [
     "check_butterfly",
     "check_calendar",
     "check_durrleman",
+    "close_to_close_vol",
     "essvi_total_variance",
     "essvi_vol",
     "extract_rnd",
+    "garman_klass_vol",
     "hagan_implied_vol",
+    "parkinson_vol",
     "rnd_gate",
     "validate_rnd",
     "validate_surface",

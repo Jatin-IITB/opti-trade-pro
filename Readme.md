@@ -36,6 +36,22 @@ Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/r
 - **Groundedness audit** (`optitrade.audit`) — deterministic auditor: an agent claim is
   trusted only if every number it states matches the journal events it cites
   (`test_groundedness.py`). No LLM in the money path, ever.
+- **Strategy + backtest** (`optitrade.strategy`, `optitrade.backtest`) — VRP harvesting
+  behind a `Strategy` protocol shared by backtester and live desk (backtested code *is*
+  production decision code); typed Indian cost model (STT/exchange/GST/SEBI/stamp/
+  brokerage, per-fill breakdowns); walk-forward evaluation reporting out-of-sample **and
+  deflated** Sharpe (Bailey–López de Prado) with honest trial accounting. Economic ground
+  truths enforced: positive synthetic VRP ⇒ profit, zero VRP ⇒ zero trades, a tight vega
+  cap blocks 100% of entries (`test_walk_forward.py`, `test_dsr.py`, `test_costs.py`,
+  ADR-016/017).
+- **Paper desk** (`optitrade.desk`) — `run_daily_cycle`: mark → strategy → debate →
+  fail-closed risk → paper fill → WW hedge → journal, with a file-based **kill switch**
+  a drawdown HALT engages automatically; self-auditing analyst agents (Surface Auditor,
+  Post-Mortem) that must ground at 100% against the journal before reporting
+  (`test_daily_cycle.py`, `test_analysts.py`, ADR-018).
+- **Live capture** (`options_trading` → `/api/v1/capture/*`) — Upstox chains through the
+  quote filters into the Parquet store; clean history accumulates per run
+  (`tests/unit/test_capture_service.py`).
 
 And the connective tissue the engines report through:
 
@@ -55,6 +71,8 @@ uv venv --python 3.12 && uv pip install -e ".[dev]"   # or: pip install -e ".[de
 
 optitrade demo         # end-to-end synthetic run: chain → surface → Greeks →
                        # debate → risk review → hedging sim, journaled to ./runtime_data
+optitrade cycle        # paper desk over a synthetic market: strategy → debate →
+                       # fail-closed risk → paper fills → WW hedging → kill switch
 
 pytest -q              # full suite (deterministic, seeded)
 pytest -q -m benchmark # latency targets (run locally; excluded on shared CI runners)
@@ -99,7 +117,7 @@ Start with [docs/architecture.md](docs/architecture.md), then the ADR index in
 ```
 src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker deps)
   core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/
-  attribution/ backtest/ data/ explain/ audit/ mcp_server.py
+  attribution/ backtest/ data/ explain/ audit/ strategy/ desk/ mcp_server.py
 src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
 tests/unit/quant/         the enforcing tests referenced throughout this README
 docs/adr/                 architecture decision records (ADR-001…015)

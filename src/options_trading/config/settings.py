@@ -145,6 +145,10 @@ class Settings(BaseSettings):
     JOB_REGISTRY_PATH: str = Field(
         default=".job_registry.json", description="Job registry path (JSON)"
     )
+    snapshot_store_path: str = Field(
+        default="runtime_data/snapshots",
+        description="Root directory for clean option-chain Parquet snapshots",
+    )
     # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------

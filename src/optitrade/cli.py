@@ -311,11 +311,84 @@ def demo(journal_dir: Path) -> int:
     return 0
 
 
+def cycle(days: int, seed: int, journal_dir: Path) -> int:
+    """Run the paper desk over a synthetic VRP market — the phase-4 loop.
+
+    Each day goes through the full deterministic money path (ADR-018):
+    strategy → debate panel → fail-closed risk review → paper fill →
+    Whalley-Wilmott hedge decision → journal. A drawdown HALT engages the
+    file-based kill switch and every later day short-circuits.
+    """
+    from optitrade.backtest.market_replay import SyntheticVRPMarket
+    from optitrade.desk import DeskConfig, KillSwitch, run_daily_cycle
+    from optitrade.strategy import VRPConfig, VRPStrategy
+
+    run_id = f"cycle-{time.strftime('%Y%m%d-%H%M%S')}"
+    journal = EventLog(journal_dir, run_id)
+    kill_switch = KillSwitch(journal_dir / "HALT")
+    print(f"OptiTrade Pro {optitrade.__version__} — paper desk run {run_id} (synthetic market)\n")
+
+    market = SyntheticVRPMarket(
+        n_days=max(days, 2), spot=SPOT, rate=RATE, realized_vol=0.18, vrp=0.06, seed=seed
+    )
+    # Index-option scale: lot_size 50 and 4 lots put the flat ₹20/order
+    # brokerage in proportion to premium — at toy size the execution expert
+    # (correctly) rejects entries whose costs eat most of the edge.
+    strategy = VRPStrategy(VRPConfig(quantity=4.0), lot_size=50)
+    # max_concentration=1.0: the first trade into an empty book is 100% of
+    # gross by definition — the bootstrap policy documented in risk.checks.
+    limits = RiskLimits(
+        max_abs_delta=500.0,
+        max_abs_gamma=50.0,
+        max_abs_vega=5_000.0,
+        max_drawdown=0.15,
+        max_concentration=1.0,
+    )
+    config = DeskConfig(
+        limits=limits,
+        band=BandParams(proportional_cost=5e-4, risk_aversion=1.0),
+        underlying_symbol="SYNTH",
+    )
+    panel = DebatePanel(
+        experts=(RiskOfficer(limits), StrategyExpert(), ExecutionExpert()), journal=journal
+    )
+    portfolio = Portfolio(
+        cash=1_000_000.0,
+        equity=1_000_000.0,
+        high_water_mark=1_000_000.0,
+        margin_available=500_000.0,
+    )
+    book: tuple[Position, ...] = ()
+
+    for i, day in enumerate(market):
+        result, book, portfolio = run_daily_cycle(
+            day, portfolio, book, strategy, config, journal, kill_switch, panel
+        )
+        halted = "  ** HALTED **" if result.halted else ""
+        print(
+            f"[day {i + 1:02d}] {result.action_taken:<28} fills={len(result.fills)} "
+            f"positions={len(book)} Δ={result.book_greeks.delta:+8.2f} "
+            f"equity={portfolio.equity:>12,.2f}{halted}"
+        )
+        if result.halted:
+            break
+
+    n_events = sum(1 for _ in journal.replay())
+    switch_state = f"ENGAGED ({kill_switch.reason()})" if kill_switch.is_engaged() else "clear"
+    print(f"\n[desk] kill switch: {switch_state}")
+    print(f"[journal] {n_events} events → {journal_dir / (run_id + '.jsonl')}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="optitrade", description=__doc__)
     sub = parser.add_subparsers(dest="command")
     demo_p = sub.add_parser("demo", help="run the synthetic end-to-end demonstration")
     demo_p.add_argument("--journal-dir", type=Path, default=Path("runtime_data"))
+    cycle_p = sub.add_parser("cycle", help="run the paper desk over a synthetic market")
+    cycle_p.add_argument("--days", type=int, default=20)
+    cycle_p.add_argument("--seed", type=int, default=11)
+    cycle_p.add_argument("--journal-dir", type=Path, default=Path("runtime_data"))
     sub.add_parser("version", help="print version")
     args = parser.parse_args()
 
@@ -323,6 +396,8 @@ def main() -> int:
         print(optitrade.__version__)
         return 0
     journal_dir = getattr(args, "journal_dir", Path("runtime_data"))
+    if args.command == "cycle":
+        return cycle(args.days, args.seed, journal_dir)
     return demo(journal_dir)
 
 
