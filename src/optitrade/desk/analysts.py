@@ -17,11 +17,19 @@ is testable before any stochastic agent sits on the desk.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from optitrade.audit.groundedness import AgentClaim, GroundednessAuditor, GroundednessReport
+from optitrade.greeks.scenario import BookPosition, ScenarioGrid, run_scenario_grid
 from optitrade.journal.event_log import EventLog
 from optitrade.journal.events import Event
+
+# Calendar-day convention for scenario time shifts (ACT/365), matching
+# optitrade.greeks.scenario.
+_DAYS_PER_YEAR = 365.0
 
 
 @dataclass(frozen=True)
@@ -236,4 +244,286 @@ class PostMortemAnalyst:
         )
 
 
-__all__ = ["AnalystReport", "PostMortemAnalyst", "SurfaceAuditor"]
+class RegimeAnalyst:
+    """Reads the latest ``market_features`` event and narrates the vol regime.
+
+    The event is written by :func:`~optitrade.desk.cycle.run_daily_cycle`
+    before the strategy decision and carries ``ts``, ``spot``,
+    ``realized_vol`` plus whatever derived features the market producer
+    populated (``atm_iv``, ``vrp``, ``term_slope``, ``skew_25d``, ...).
+    Features absent from the event are listed as not covered — no claim is
+    made without an engine number to cite.
+
+    Thresholds (plain config, all in decimal vol units):
+
+    - ``high_vrp``: a variance risk premium above this is flagged as a rich
+      premium regime for vol sellers.
+    - ``steep_term``: a term slope whose magnitude exceeds this is flagged as
+      a steep (or deeply inverted) term structure.
+    - ``deep_skew``: a 25-delta skew whose magnitude exceeds this is flagged
+      as pronounced skew.
+    """
+
+    def __init__(
+        self,
+        high_vrp: float = 0.04,
+        steep_term: float = 0.05,
+        deep_skew: float = 0.03,
+    ) -> None:
+        self._high_vrp = high_vrp
+        self._steep_term = steep_term
+        self._deep_skew = deep_skew
+
+    @property
+    def name(self) -> str:
+        return "regime_analyst"
+
+    def report(self, journal: EventLog) -> AnalystReport:
+        event = _latest_event(journal, "market_features")
+        data = event.data
+        seq = event.sequence
+        spot = float(data["spot"])
+        realized_vol = float(data["realized_vol"])
+
+        sentences = [
+            f"Market regime (journal seq {seq}): spot {spot:.2f} with realized vol "
+            f"{realized_vol:.4f}."
+        ]
+        claims: list[AgentClaim] = [
+            AgentClaim(
+                claim_id="regime_market",
+                statement=f"spot is {spot:g} and realized vol is {realized_vol:g} (seq {seq})",
+                citations=(seq,),
+                values=(("spot", spot), ("realized_vol", realized_vol)),
+            )
+        ]
+        missing: list[str] = []
+
+        if data.get("atm_iv") is None:
+            missing.append("atm_iv")
+        else:
+            atm_iv = float(data["atm_iv"])
+            if atm_iv > realized_vol:
+                relation = "above"
+            elif atm_iv < realized_vol:
+                relation = "below"
+            else:
+                relation = "level with"
+            sentences.append(
+                f"Implied vol {atm_iv:.4f} trades {relation} realized {realized_vol:.4f}."
+            )
+            claims.append(
+                AgentClaim(
+                    claim_id="regime_vol_level",
+                    statement=(
+                        f"ATM implied vol is {atm_iv:g} vs realized {realized_vol:g} (seq {seq})"
+                    ),
+                    citations=(seq,),
+                    values=(("atm_iv", atm_iv), ("realized_vol", realized_vol)),
+                )
+            )
+
+        if data.get("vrp") is None:
+            missing.append("vrp")
+        else:
+            vrp = float(data["vrp"])
+            if vrp >= 0:
+                side = "positive (implied over realized)"
+            else:
+                side = "negative (implied under realized)"
+            sentences.append(f"The variance risk premium is {side} at {vrp:+.4f}.")
+            if vrp > self._high_vrp:
+                sentences.append(
+                    f"FLAG: VRP {vrp:+.4f} exceeds the {self._high_vrp:.4f} high-VRP threshold — "
+                    "a rich premium regime for vol sellers."
+                )
+            claims.append(
+                AgentClaim(
+                    claim_id="regime_vrp",
+                    statement=f"the variance risk premium is {vrp:g} (seq {seq})",
+                    citations=(seq,),
+                    values=(("vrp", vrp),),
+                )
+            )
+
+        if data.get("term_slope") is None:
+            missing.append("term_slope")
+        else:
+            term_slope = float(data["term_slope"])
+            if term_slope > 0:
+                direction = "upward-sloping"
+            elif term_slope < 0:
+                direction = "inverted"
+            else:
+                direction = "flat"
+            sentences.append(
+                f"The term structure is {direction} at {term_slope:+.4f} between tenors."
+            )
+            if abs(term_slope) > self._steep_term:
+                sentences.append(
+                    f"FLAG: term slope {term_slope:+.4f} exceeds the {self._steep_term:.4f} "
+                    "steep-term threshold in magnitude."
+                )
+            claims.append(
+                AgentClaim(
+                    claim_id="regime_term_slope",
+                    statement=f"the term slope is {term_slope:g} (seq {seq})",
+                    citations=(seq,),
+                    values=(("term_slope", term_slope),),
+                )
+            )
+
+        if data.get("skew_25d") is None:
+            missing.append("skew_25d")
+        else:
+            skew = float(data["skew_25d"])
+            if skew > 0:
+                shape = "puts over calls"
+            elif skew < 0:
+                shape = "calls over puts"
+            else:
+                shape = "symmetric"
+            sentences.append(f"25-delta skew is {skew:+.4f} ({shape}).")
+            if abs(skew) > self._deep_skew:
+                sentences.append(
+                    f"FLAG: skew {skew:+.4f} exceeds the {self._deep_skew:.4f} deep-skew "
+                    "threshold in magnitude."
+                )
+            claims.append(
+                AgentClaim(
+                    claim_id="regime_skew",
+                    statement=f"the 25-delta skew is {skew:g} (seq {seq})",
+                    citations=(seq,),
+                    values=(("skew_25d", skew),),
+                )
+            )
+
+        if missing:
+            sentences.append(
+                "Not journaled this cycle (no claim without an engine number): "
+                + ", ".join(missing)
+                + "."
+            )
+
+        frozen_claims = tuple(claims)
+        return AnalystReport(
+            analyst=self.name,
+            text=" ".join(sentences),
+            claims=frozen_claims,
+            groundedness=_self_audit(journal, frozen_claims),
+        )
+
+
+@dataclass(frozen=True)
+class ScenarioQuery:
+    """A structured what-if against the book, in engine units.
+
+    ``spot_shift`` is relative (-0.05 == spot down 5%), ``vol_shift`` is an
+    absolute vol move as a decimal (0.02 == +2 vol-pt), ``time_shift_days``
+    is calendar days forward (ACT/365). ``label`` names the scenario in the
+    journal and the report text.
+    """
+
+    spot_shift: float
+    vol_shift: float
+    time_shift_days: float = 0.0
+    label: str = ""
+
+
+class RiskOfficerAnalyst:
+    """Answers structured scenario queries against the live book.
+
+    Deliberately takes no natural language: the query surface is the typed
+    :class:`ScenarioQuery` dataclass, so the compute path stays deterministic
+    and testable. An optional LLM adapter can translate desk-speak ("what if
+    we gap down 5%?") into a :class:`ScenarioQuery` later without touching
+    this class.
+
+    Mirrors the MCP tool-call pattern (compute -> journal -> cite): ``answer``
+    first revalues the book with :func:`run_scenario_grid` at exactly the
+    queried shifts, appends a ``scenario_query`` event carrying the inputs and
+    the resulting P&L, and only then writes prose whose claims cite the event
+    it just journaled — the report is grounded in an engine fact by
+    construction.
+    """
+
+    @property
+    def name(self) -> str:
+        return "risk_officer_analyst"
+
+    def answer(
+        self,
+        query: ScenarioQuery,
+        book: Sequence[BookPosition],
+        spot: float,
+        rate: float,
+        journal: EventLog,
+    ) -> AnalystReport:
+        grid = ScenarioGrid(
+            spot_shifts=np.array([query.spot_shift], dtype=np.float64),
+            vol_shifts=np.array([query.vol_shift], dtype=np.float64),
+            time_shifts=np.array([query.time_shift_days / _DAYS_PER_YEAR], dtype=np.float64),
+        )
+        result = run_scenario_grid(book, spot, rate, grid)
+        pnl = float(result.pnl[0, 0, 0])
+        base_value = float(result.base_value)
+        event = journal.append(
+            "scenario_query",
+            {
+                "label": query.label,
+                "spot_shift": query.spot_shift,
+                "vol_shift": query.vol_shift,
+                "time_shift_days": query.time_shift_days,
+                "pnl": pnl,
+                "base_value": base_value,
+            },
+        )
+        seq = event.sequence
+
+        label_note = f" [{query.label}]" if query.label else ""
+        time_note = (
+            f" and {query.time_shift_days:g} calendar days pass" if query.time_shift_days else ""
+        )
+        text = (
+            f"Scenario{label_note} (journal seq {seq}): if spot moves {query.spot_shift:+.1%} "
+            f"and vol moves {query.vol_shift * 100.0:+.1f} vol-pt{time_note}, the book P&L is "
+            f"{pnl:+.2f} against a base value of {base_value:.2f} (full revaluation, not a "
+            "Taylor expansion)."
+        )
+        claims = (
+            AgentClaim(
+                claim_id="scenario_pnl",
+                statement=f"scenario P&L is {pnl:g} on base value {base_value:g} (seq {seq})",
+                citations=(seq,),
+                values=(("pnl", pnl), ("base_value", base_value)),
+            ),
+            AgentClaim(
+                claim_id="scenario_shifts",
+                statement=(
+                    f"the query shifted spot {query.spot_shift:g}, vol {query.vol_shift:g} and "
+                    f"time {query.time_shift_days:g} days (seq {seq})"
+                ),
+                citations=(seq,),
+                values=(
+                    ("spot_shift", query.spot_shift),
+                    ("vol_shift", query.vol_shift),
+                    ("time_shift_days", query.time_shift_days),
+                ),
+            ),
+        )
+        return AnalystReport(
+            analyst=self.name,
+            text=text,
+            claims=claims,
+            groundedness=_self_audit(journal, claims),
+        )
+
+
+__all__ = [
+    "AnalystReport",
+    "PostMortemAnalyst",
+    "RegimeAnalyst",
+    "RiskOfficerAnalyst",
+    "ScenarioQuery",
+    "SurfaceAuditor",
+]

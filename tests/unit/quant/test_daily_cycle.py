@@ -142,8 +142,45 @@ class TestEnterPath:
         assert not kill_switch.is_engaged()
 
         types = event_types(journal)
-        for expected in ("debate_decision", "risk_decision", "hedge_decision", "daily_cycle"):
+        expected_types = (
+            "market_features",
+            "debate_decision",
+            "risk_decision",
+            "hedge_decision",
+            "daily_cycle",
+        )
+        for expected in expected_types:
             assert expected in types
+        # The market picture is journaled before any decision-stage event.
+        assert types.index("market_features") < types.index("debate_decision")
+
+    def test_market_features_event_carries_the_day_and_its_features(self, journal, kill_switch):
+        day = MarketDay(
+            timestamp=1_700_000_000.0,
+            spot=100.0,
+            rate=0.05,
+            realized_vol=0.2,
+            surface=FlatSurface(0.15),
+            features={"atm_iv": 0.15, "vrp": -0.05},
+        )
+        result, _, _ = run_daily_cycle(
+            day=day,
+            portfolio=make_portfolio(),
+            book=(),
+            strategy=StubStrategy(StrategyDecision(action="hold")),
+            config=make_config(),
+            journal=journal,
+            kill_switch=kill_switch,
+        )
+        [event] = [e for e in journal.replay() if e.event_type == "market_features"]
+        assert event.correlation_id == result.correlation_id
+        assert event.data == {
+            "ts": 1_700_000_000.0,
+            "spot": 100.0,
+            "realized_vol": 0.2,
+            "atm_iv": 0.15,
+            "vrp": -0.05,
+        }
 
     def test_cycle_events_share_the_cycle_correlation_id(self, journal, kill_switch):
         result, _, _ = run_daily_cycle(

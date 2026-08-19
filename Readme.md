@@ -51,7 +51,19 @@ Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/r
   (`test_daily_cycle.py`, `test_analysts.py`, ADR-018).
 - **Live capture** (`options_trading` → `/api/v1/capture/*`) — Upstox chains through the
   quote filters into the Parquet store; clean history accumulates per run
-  (`tests/unit/test_capture_service.py`).
+  (`tests/unit/test_capture_service.py`). The **scheduler**
+  (`/capture/schedule/start|stop|status`) runs it unattended inside the IST market window
+  — injected-clock tested, one bad capture never kills the loop, operator-started by
+  design (`test_capture_scheduler.py`, ADR-019).
+- **Real-history replay + drift** — `StoreReplay` turns captured Parquet into the same
+  `MarketDay`s the synthetic replay emits, so the walk-forward harness runs on real data
+  unchanged; `backtest_vs_desk_drift` runs backtester and paper desk over identical days
+  with the identical strategy and reports the execution-model gap in bps
+  (`test_store_replay.py`, `test_reconcile.py`, ADR-019).
+- **Daily report** (`optitrade.desk.report`) — one markdown artifact per run: desk
+  summary + every analyst whose source events exist, each section groundedness-scored,
+  skipped analysts listed rather than hidden (`test_daily_report.py`, ADR-020). Emitted
+  automatically by `optitrade cycle`.
 
 And the connective tissue the engines report through:
 

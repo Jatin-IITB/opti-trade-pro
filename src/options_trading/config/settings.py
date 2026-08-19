@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         default="runtime_data/snapshots",
         description="Root directory for clean option-chain Parquet snapshots",
     )
+    capture_interval_seconds: int = Field(
+        default=900,
+        description="Default cadence for the unattended capture scheduler (seconds)",
+    )
     # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------

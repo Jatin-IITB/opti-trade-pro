@@ -16,13 +16,13 @@ and propose only.**
 
 | Phase | State |
 |---|---|
-| 0 Data pipeline | **Built** — filters + Parquet store + Upstox capture API (`/api/v1/capture/run`); remaining: scheduled unattended capture on market days |
+| 0 Data pipeline | **Complete** — filters + Parquet store + capture API + unattended IST-window scheduler (ADR-019); accumulate real days by starting `/capture/schedule/start` |
 | 1 Joint surface | **Built** — eSSVI joint fit, Durrleman + RND gates, SABR benchmark (ADR-012) |
 | 2 AAD + P&L explain | **Partial** — P&L explain + PCA factors + bucket reports built; JAX AAD revisit trigger still per ADR-006 |
-| 3 Strategy + backtest | **Built on synthetic** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); needs real captured history |
-| 4 Paper loop | **Skeleton built** — `run_daily_cycle` + kill switch + `optitrade cycle` (ADR-018); remaining: scheduler, live capture wiring, daily report |
-| 5 Agent layer | **Primitives built** — MCP server, groundedness auditor, 2 deterministic analysts; remaining: Regime Analyst, Risk Officer NL queries, LLM adapters |
-| 6 Research loop | Not started (gated on 3-5) |
+| 3 Strategy + backtest | **Built** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); `StoreReplay` runs it on real history as it accumulates |
+| 4 Paper loop | **Built** — daily cycle, kill switch, daily report, backtest-vs-desk drift metric (ADR-018/019/020); remaining: wire cycle to live captures on a schedule, drive drift toward zero |
+| 5 Agent layer | **Deterministic roster complete** — MCP server, groundedness auditor, all four analysts (Surface, Regime, Risk Officer, Post-Mortem); remaining: LLM adapters over the same rails |
+| 6 Research loop | Not started (gated on real history) |
 
 ## Phase detail
 

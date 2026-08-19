@@ -206,6 +206,21 @@ def run_daily_cycle(
         )
         return result, book, portfolio
 
+    # (a2) Journal the day's market picture before any decision is taken.
+    # This is the Regime Analyst's citation source (ADR-015): every number an
+    # agent later narrates about the regime must trace to this event, so it is
+    # written even on days when the strategy ends up holding.
+    journal.append(
+        "market_features",
+        {
+            "ts": day.timestamp,
+            "spot": day.spot,
+            "realized_vol": day.realized_vol,
+            **day.features,
+        },
+        correlation_id=correlation_id,
+    )
+
     # (b) Mark the book: aggregate greeks and mark-to-model equity.
     book_greeks, mark_value = _mark_book(day, book)
     portfolio = replace(portfolio, positions=book)

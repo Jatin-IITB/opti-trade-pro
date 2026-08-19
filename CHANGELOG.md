@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: SemVer.
 
 ## [3.0.0] — Unreleased (feature/production-rebuild)
 
+### Added (wave 4 — unattended capture, real-history replay, drift, daily report)
+- `CaptureScheduler` + `/api/v1/capture/schedule/*`: unattended chain capture inside the
+  IST market window; injected clock/sleeper, failure-tolerant loop, operator-started
+  (ADR-019).
+- `StoreReplay`: captured Parquet history → `MarketDay`s (EOD snapshot per date, filter →
+  surface fit → trailing RV → features); walk-forward runs on real data unchanged.
+- `desk/reconcile.py`: backtest-vs-desk drift metric (bps of equity, per-day table,
+  correlation) — phase 4's exit criterion, isolating execution-model differences.
+- `RegimeAnalyst` + `RiskOfficerAnalyst` (structured `ScenarioQuery`s, compute → journal
+  → cite) completing the four-analyst roster; `market_features` journaled every cycle.
+- `desk/report.py`: markdown daily report with per-section groundedness scores and an
+  explicit coverage-gap list; wired into `optitrade cycle` (ADR-020).
+
 ### Added (wave 3 — capture, strategy, walk-forward, paper desk)
 - `options_trading` capture: `UpstoxCaptureSource` (CaptureSource protocol over live
   chains), `/api/v1/capture/run` + `/capture/history`, clean-only Parquet persistence,

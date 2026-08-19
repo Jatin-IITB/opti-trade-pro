@@ -373,9 +373,17 @@ def cycle(days: int, seed: int, journal_dir: Path) -> int:
         if result.halted:
             break
 
+    from optitrade.desk import RegimeAnalyst, build_daily_report
+
+    report = build_daily_report(
+        journal, out_dir=journal_dir / "reports", regime_analyst=RegimeAnalyst()
+    )
+    print(f"\n[report] daily report → {report.path}")
+    print(f"[report] analyst groundedness: {report.grounded_rate_overall:.0%}")
+
     n_events = sum(1 for _ in journal.replay())
     switch_state = f"ENGAGED ({kill_switch.reason()})" if kill_switch.is_engaged() else "clear"
-    print(f"\n[desk] kill switch: {switch_state}")
+    print(f"[desk] kill switch: {switch_state}")
     print(f"[journal] {n_events} events → {journal_dir / (run_id + '.jsonl')}")
     return 0
 
