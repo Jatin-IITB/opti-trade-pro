@@ -5,10 +5,7 @@ FIXED: Modern authentication service using FastAPI and async patterns.
 Fixed user ID handling and token storage issues.
 """
 
-import json
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
 import uuid
 
 import httpx
@@ -28,12 +25,13 @@ from ..utils.security import SecureStorage
 
 logger = logging.getLogger(__name__)
 
+
 class AuthService:
     """
     FIXED: Modern authentication service with proper user ID handling.
     """
 
-    def __init__(self, storage: Optional[SecureStorage] = None):
+    def __init__(self, storage: SecureStorage | None = None):
         self.settings = get_settings()
         self.storage = storage or SecureStorage()
         self.oauth_config = OAuthConfig(
@@ -41,7 +39,7 @@ class AuthService:
             client_secret=self.settings.upstox_secret_key,
             redirect_uri=self.settings.oauth_redirect_uri,
         )
-        self._http_client: Optional[httpx.AsyncClient] = None
+        self._http_client: httpx.AsyncClient | None = None
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -51,7 +49,7 @@ class AuthService:
                 "Accept": "application/json",
                 "Api-Version": "2.0",
                 "Content-Type": "application/x-www-form-urlencoded",
-            }
+            },
         )
         return self
 
@@ -60,7 +58,7 @@ class AuthService:
         if self._http_client:
             await self._http_client.aclose()
 
-    def get_authorization_url(self, state: Optional[str] = None) -> str:
+    def get_authorization_url(self, state: str | None = None) -> str:
         """Generate OAuth2 authorization URL."""
         params = {
             "response_type": "code",
@@ -73,7 +71,9 @@ class AuthService:
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{self.oauth_config.authorization_url}?{query_string}"
 
-    async def exchange_code_for_tokens(self, callback: OAuthCallbackRequest, initial_user_id: str="default") -> TokenInfo:
+    async def exchange_code_for_tokens(
+        self, callback: OAuthCallbackRequest, initial_user_id: str = "default"
+    ) -> TokenInfo:
         """
         FIXED: Exchange authorization code for access tokens with proper user ID handling.
         """
@@ -89,10 +89,7 @@ class AuthService:
         }
 
         try:
-            response = await self._http_client.post(
-                self.oauth_config.token_url,
-                data=data
-            )
+            response = await self._http_client.post(self.oauth_config.token_url, data=data)
             response.raise_for_status()
             token_data = TokenData(**response.json())
 
@@ -102,7 +99,7 @@ class AuthService:
                 refresh_token=token_data.refresh_token,
                 expires_in=token_data.expires_in,
                 token_type=token_data.token_type,
-                user_id=initial_user_id or"temp",  # Temporary user_id
+                user_id=initial_user_id or "temp",  # Temporary user_id
             )
 
             # Fetch actual user profile to get real user_id
@@ -127,8 +124,10 @@ class AuthService:
 
             # Store token securely
             await self.storage.store_token(token_info)
-            logger.info(f"Successfully exchanged authorization code for tokens for user: {actual_user_id}")
-            
+            logger.info(
+                f"Successfully exchanged authorization code for tokens for user: {actual_user_id}"
+            )
+
             return token_info
 
         except httpx.HTTPStatusError as e:
@@ -136,13 +135,13 @@ class AuthService:
             raise AuthError(f"Failed to exchange authorization code: {e.response.text}")
         except Exception as e:
             logger.error(f"Unexpected error during token exchange: {e}")
-            raise AuthError(f"Token exchange failed: {str(e)}")
+            raise AuthError(f"Token exchange failed: {e!s}")
 
     async def get_valid_access_token(self, user_id: str = "default") -> str:
         """Get a valid access token, refreshing if necessary."""
         # Try to load existing token
         token_info = await self.storage.load_token(user_id)
-        
+
         if not token_info and user_id == "default":
             try:
                 stored_users = await self.storage.list_stored_users()
@@ -156,12 +155,14 @@ class AuthService:
         if token_info:
             # Check if token is still valid
             if not token_info.is_expired and await self.validate_token(token_info.access_token):
-                    return token_info.access_token
+                return token_info.access_token
 
             # Try to refresh token
             if token_info.refresh_token:
                 try:
-                    new_token = await self.refresh_token(token_info.refresh_token, token_info.user_id)
+                    new_token = await self.refresh_token(
+                        token_info.refresh_token, token_info.user_id
+                    )
                     logger.info("Successfully refreshed access token")
                     return new_token.access_token
                 except TokenRefreshError:
@@ -198,10 +199,7 @@ class AuthService:
         }
 
         try:
-            response = await self._http_client.post(
-                self.oauth_config.token_url,
-                data=data
-            )
+            response = await self._http_client.post(self.oauth_config.token_url, data=data)
             response.raise_for_status()
             token_data = TokenData(**response.json())
 
@@ -223,7 +221,7 @@ class AuthService:
             raise TokenRefreshError(f"Failed to refresh token: {e.response.text}")
         except Exception as e:
             logger.error(f"Unexpected error during token refresh: {e}")
-            raise TokenRefreshError(f"Token refresh failed: {str(e)}")
+            raise TokenRefreshError(f"Token refresh failed: {e!s}")
 
     async def validate_token(self, access_token: str) -> bool:
         """Validate access token with Upstox API."""
@@ -238,8 +236,7 @@ class AuthService:
 
         try:
             response = await self._http_client.get(
-                f"{self.settings.upstox_base_url}/v2/user/profile",
-                headers=headers
+                f"{self.settings.upstox_base_url}/v2/user/profile", headers=headers
             )
 
             if response.status_code == 200:
@@ -269,27 +266,26 @@ class AuthService:
 
         try:
             response = await self._http_client.get(
-                f"{self.settings.upstox_base_url}/v2/user/profile",
-                headers=headers
+                f"{self.settings.upstox_base_url}/v2/user/profile", headers=headers
             )
             response.raise_for_status()
-            
+
             return UserProfile(**response.json().get("data", {}))
 
         except httpx.HTTPStatusError as e:
             raise AuthError(f"Failed to fetch user profile: {e.response.text}")
         except Exception as e:
-            raise AuthError(f"Profile fetch failed: {str(e)}")
+            raise AuthError(f"Profile fetch failed: {e!s}")
 
     async def logout(self, user_id: str = "default") -> None:
         """Logout user by clearing stored tokens."""
         await self.storage.clear_token(user_id)
         logger.info(f"Cleared tokens for user: {user_id}")
 
-    async def get_auth_status(self, user_id: Optional[str] = "default") -> AuthStatus:
+    async def get_auth_status(self, user_id: str | None = "default") -> AuthStatus:
         """Get current authentication status."""
         token_info = await self.storage.load_token(user_id)
-        
+
         if not token_info and user_id == "default":
             try:
                 stored_users = await self.storage.list_stored_users()

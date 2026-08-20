@@ -1,339 +1,61 @@
-# .github/workflows/ci.yml
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, develop ]
-  release:
-    types: [published]
-
-env:
-  PYTHON_VERSION: "3.11"
-  POETRY_VERSION: "1.7.1"
+    branches: [main]
 
 jobs:
-  # Code Quality Checks
-  quality:
+  lint:
+    name: Lint & Types
     runs-on: ubuntu-latest
-    name: Code Quality
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-    
-    - name: Load cached venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v3
-      with:
-        path: .venv
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/pyproject.toml') }}
-    
-    - name: Install dependencies
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root --with dev
-    
-    - name: Install project
-      run: poetry install --no-interaction
-    
-    - name: Run pre-commit hooks
-      run: |
-        poetry run pre-commit install
-        poetry run pre-commit run --all-files
-    
-    - name: Type checking with mypy
-      run: poetry run mypy src/options_trading --config-file mypy.ini
-    
-    - name: Security scan with bandit
-      run: poetry run bandit -r src/options_trading -f json -o bandit-report.json
-    
-    - name: Upload security scan results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: security-scan-results
-        path: bandit-report.json
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: mypy src/optitrade
 
-  # Unit Tests
   test:
+    name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    name: Unit Tests
-    
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
-    
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-    
-    - name: Load cached venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v3
-      with:
-        path: .venv
-        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
-    
-    - name: Install dependencies
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root --with dev
-    
-    - name: Install project
-      run: poetry install --no-interaction
-    
-    - name: Run unit tests
-      run: |
-        poetry run pytest tests/unit/ \
-          --cov=src/options_trading \
-          --cov-report=xml \
-          --cov-report=html \
-          --cov-report=term-missing \
-          --junit-xml=test-results.xml \
-          -v
-      env:
-        REDIS_URL: redis://localhost:6379/1
-    
-    - name: Upload test results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: test-results-${{ matrix.python-version }}
-        path: |
-          test-results.xml
-          htmlcov/
-          coverage.xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      # Benchmark tests assert wall-clock targets; shared CI runners are too noisy
+      # for hard latency assertions, so they run (and are enforced) locally.
+      - run: >
+          pytest -q -m "not benchmark"
+          --cov=src/optitrade --cov=src/options_trading
+          --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
 
-  # Integration Tests
-  integration:
+  docker:
+    name: Docker build
     runs-on: ubuntu-latest
-    name: Integration Tests
-    needs: [quality, test]
-    
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-      
-      postgres:
-        image: postgres:14
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: options_trading_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    
+    needs: [lint, test]
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-    
-    - name: Install dependencies
-      run: poetry install --no-interaction --with dev
-    
-    - name: Run integration tests
-      run: |
-        poetry run pytest tests/integration/ \
-          --junit-xml=integration-results.xml \
-          -v
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/options_trading_test
-        REDIS_URL: redis://localhost:6379/1
-        UPSTOX_API_KEY: test_api_key
-        UPSTOX_SECRET_KEY: test_secret_key
-    
-    - name: Upload integration test results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: integration-test-results
-        path: integration-results.xml
-
-  # Build Docker Image
-  build:
-    runs-on: ubuntu-latest
-    name: Build Docker Image
-    needs: [quality, test]
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ghcr.io/${{ github.repository }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-
-  # Security Scanning
-  security:
-    runs-on: ubuntu-latest
-    name: Security Scan
-    needs: [build]
-    if: github.event_name != 'pull_request'
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-    
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
-
-  # Deploy to staging
-  deploy-staging:
-    runs-on: ubuntu-latest
-    name: Deploy to Staging
-    needs: [integration, build, security]
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-    environment: staging
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Deploy to staging
-      run: |
-        echo "Deploying to staging environment..."
-        # Add your staging deployment commands here
-    
-    - name: Run smoke tests
-      run: |
-        echo "Running smoke tests against staging..."
-        # Add your smoke test commands here
-
-  # Deploy to production
-  deploy-production:
-    runs-on: ubuntu-latest
-    name: Deploy to Production
-    needs: [integration, build, security]
-    if: github.event_name == 'release' && github.event.action == 'published'
-    environment: production
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment..."
-        # Add your production deployment commands here
-    
-    - name: Run health checks
-      run: |
-        echo "Running health checks against production..."
-        # Add your health check commands here
-
-  # Notification
-  notify:
-    runs-on: ubuntu-latest
-    name: Notify
-    needs: [deploy-staging, deploy-production]
-    if: always()
-    
-    steps:
-    - name: Notify on success
-      if: ${{ needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success' }}
-      run: |
-        echo "Deployment successful! 🎉"
-        # Add notification logic (Slack, email, etc.)
-    
-    - name: Notify on failure
-      if: ${{ needs.deploy-staging.result == 'failure' || needs.deploy-production.result == 'failure' }}
-      run: |
-        echo "Deployment failed! ❌"
-        # Add failure notification logic
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -6,40 +6,33 @@ Provides real-time system monitoring, risk calculations, and infrastructure stat
 Strategy-related functionality moved to StrategyService for better separation of concerns.
 """
 
-import logging
 import asyncio
-import os
-import sys
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Any, Tuple
-from pathlib import Path
+from typing import Any
+
 import psutil
-import pandas as pd
-import numpy as np
 
-
-from ..models.dashboard import (
-    SystemStatus,
-    SystemHealth,
-    SystemMetrics,
-    AuthenticationStatus,
-    MarketDataStatus,
-    PositionSummary,
-    RiskMetrics,
-    DashboardConfig,
-    LogEntry,
-    GreeksSnapshot
-)
 from ..config.settings import get_settings
-from ..utils.exceptions import DataQualityError, CalculationError
-from ..utils.cache import AsyncCache
 
 # Import your existing components
 from ..market_data.manager import MarketDataManager
-
+from ..models.dashboard import (
+    AuthenticationStatus,
+    DashboardConfig,
+    LogEntry,
+    MarketDataStatus,
+    PositionSummary,
+    RiskMetrics,
+    SystemMetrics,
+    SystemStatus,
+)
+from ..utils.cache import AsyncCache
+from ..utils.exceptions import CalculationError, DataQualityError
 
 logger = logging.getLogger(__name__)
+
 
 class DashboardService:
     """
@@ -47,20 +40,21 @@ class DashboardService:
     Strategy-related functionality moved to StrategyService for better separation of concerns.
     """
 
-    def __init__(self, market_data_manager: Optional[MarketDataManager] = None, cache: Optional[AsyncCache] = None):
+    def __init__(
+        self, market_data_manager: MarketDataManager | None = None, cache: AsyncCache | None = None
+    ):
         self.settings = get_settings()
         self.market_data_manager = market_data_manager
         self._system_start_time = datetime.now()
-        
+
         # FIXED: Use correct AsyncCache initialization
         self._cache = cache or AsyncCache(ttl=300, max_size=1000)  # Changed from default_ttl to ttl
-        self._system_metrics_cache: Optional[SystemMetrics] = None
+        self._system_metrics_cache: SystemMetrics | None = None
         self._last_metric_update = datetime.now()
 
+    # inside src/options_trading/main.py (add somewhere near other helpers / after imports)
 
-# inside src/options_trading/main.py (add somewhere near other helpers / after imports)
-
-    async def get_system_status(self,user_id:Optional[str]=None) -> SystemStatus:
+    async def get_system_status(self, user_id: str | None = None) -> SystemStatus:
         """
         Get comprehensive system status including all subsystems.
         """
@@ -91,7 +85,7 @@ class DashboardService:
                 market_data=market_status,
                 system_metrics=system_metrics,
                 recent_logs=recent_logs,
-                alerts=alerts
+                alerts=alerts,
             )
 
             # Cache for 30 seconds
@@ -102,12 +96,13 @@ class DashboardService:
             raise
         except Exception as e:
             logger.error(f"Failed to get system status: {e}", exc_info=True)
-            raise DataQualityError(f"System status unavailable: {str(e)}")
+            raise DataQualityError(f"System status unavailable: {e!s}")
 
-    async def _get_auth_status(self,user_id:Optional[str]=None) -> AuthenticationStatus:
+    async def _get_auth_status(self, user_id: str | None = None) -> AuthenticationStatus:
         """Get authentication system status"""
         try:
             from ..services.auth_service import AuthService
+
             async with AuthService() as auth_service:
                 target_user = user_id or "default"
                 auth_status = await auth_service.get_auth_status(target_user)
@@ -120,39 +115,37 @@ class DashboardService:
                         user_name=profile.user_name,
                         token_expires_at=auth_status.token_expires_at,
                         last_login=datetime.now() - timedelta(hours=2),
-                        permissions=profile.products if hasattr(profile, 'products') else ["read", "write"]
+                        permissions=profile.products
+                        if hasattr(profile, "products")
+                        else ["read", "write"],
                     )
                 else:
                     return AuthenticationStatus(
                         is_authenticated=False,
                         user_id=target_user or "anonymous",
-                        user_name="Guest"
+                        user_name="Guest",
                     )
         except ImportError as e:
             logger.warning(f"AuthService import failed: {e}")
             return AuthenticationStatus(
-                is_authenticated=False,
-                user_id="unknown",
-                user_name="Guest"
+                is_authenticated=False, user_id="unknown", user_name="Guest"
             )
         except Exception as e:
             logger.warning(f"Auth status check failed: {e}")
             return AuthenticationStatus(
-                is_authenticated=False,
-                user_id="unknown",
-                user_name="Guest"
+                is_authenticated=False, user_id="unknown", user_name="Guest"
             )
 
     async def _get_market_data_status(self) -> MarketDataStatus:
         """Get REAL market data connectivity using MarketDataManager"""
         try:
-            from ..models.dashboard import MarketDataFeed, ConnectionStatus
-            
+            from ..models.dashboard import ConnectionStatus, MarketDataFeed
+
             if not self.market_data_manager:
                 return MarketDataStatus(
                     overall_status=ConnectionStatus.DISCONNECTED,
                     feeds_connected=0,
-                    total_instruments=0
+                    total_instruments=0,
                 )
 
             # Test connectivity with REAL underlying keys
@@ -166,6 +159,7 @@ class DashboardService:
                     underlying_key = self.market_data_manager.get_underlying_key(symbol, "NSE")
                     # Try to fetch real contracts to test connectivity
                     from datetime import date
+
                     nearest_expiry = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
                     contracts = self.market_data_manager.fetch_contracts_for_expiry(
                         symbol, "NSE", nearest_expiry
@@ -177,7 +171,7 @@ class DashboardService:
                         instruments_count=len(contracts),
                         last_update=datetime.now(),
                         latency_ms=await self._measure_real_latency(symbol),
-                        error_rate=0.0
+                        error_rate=0.0,
                     )
                     connected_feeds.append(feed_status)
                     total_instruments += len(contracts)
@@ -190,25 +184,29 @@ class DashboardService:
                         instruments_count=0,
                         last_update=None,
                         latency_ms=0.0,
-                        error_rate=100.0
+                        error_rate=100.0,
                     )
                     connected_feeds.append(feed_status)
 
             return MarketDataStatus(
-                overall_status=ConnectionStatus.CONNECTED if connected_feeds else ConnectionStatus.ERROR,
-                feeds_connected=len([f for f in connected_feeds if f.status == ConnectionStatus.CONNECTED]),
+                overall_status=ConnectionStatus.CONNECTED
+                if connected_feeds
+                else ConnectionStatus.ERROR,
+                feeds_connected=len(
+                    [f for f in connected_feeds if f.status == ConnectionStatus.CONNECTED]
+                ),
                 total_instruments=total_instruments,
                 last_update=datetime.now(),
                 feeds=connected_feeds,
-                response_time_ms=sum(f.latency_ms for f in connected_feeds) / len(connected_feeds) if connected_feeds else 0.0
+                response_time_ms=sum(f.latency_ms for f in connected_feeds) / len(connected_feeds)
+                if connected_feeds
+                else 0.0,
             )
 
         except Exception as e:
             logger.error(f"Real market data status check failed: {e}")
             return MarketDataStatus(
-                overall_status=ConnectionStatus.ERROR,
-                feeds_connected=0,
-                total_instruments=0
+                overall_status=ConnectionStatus.ERROR, feeds_connected=0, total_instruments=0
             )
 
     async def _measure_real_latency(self, symbol: str) -> float:
@@ -227,8 +225,9 @@ class DashboardService:
         """Get current system performance metrics with caching"""
         try:
             now = datetime.now()
-            if (self._system_metrics_cache and 
-                now - self._last_metric_update < timedelta(seconds=30)):
+            if self._system_metrics_cache and now - self._last_metric_update < timedelta(
+                seconds=30
+            ):
                 return self._system_metrics_cache
 
             # Calculate uptime
@@ -241,7 +240,7 @@ class DashboardService:
             # Get system resource usage
             cpu_percent = psutil.cpu_percent(interval=None)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
+            disk = psutil.disk_usage("/")
 
             metrics = SystemMetrics(
                 uptime=uptime,
@@ -251,7 +250,7 @@ class DashboardService:
                 api_response_time_ms=245.0,  # Would be tracked in middleware
                 error_count=0,  # Would be tracked in error handler
                 warning_count=2,  # Would be tracked in logging handler
-                last_backup=datetime.now() - timedelta(hours=6)
+                last_backup=datetime.now() - timedelta(hours=6),
             )
 
             self._system_metrics_cache = metrics
@@ -271,10 +270,10 @@ class DashboardService:
                 disk_usage_percent=0.0,
                 api_response_time_ms=0.0,
                 error_count=999,
-                warning_count=999
+                warning_count=999,
             )
 
-    async def _get_recent_logs(self, limit: int = 10) -> List[LogEntry]:
+    async def _get_recent_logs(self, limit: int = 10) -> list[LogEntry]:
         """Get recent system logs with caching"""
         try:
             cache_key = f"recent_logs_{limit}"
@@ -289,36 +288,36 @@ class DashboardService:
                     level="INFO",
                     logger="market_data",
                     message="Market data feed refreshed successfully",
-                    module="market_data_service"
+                    module="market_data_service",
                 ),
                 LogEntry(
                     timestamp=datetime.now() - timedelta(minutes=5),
                     level="INFO",
                     logger="system",
                     message="System health check completed",
-                    module="dashboard_service"
+                    module="dashboard_service",
                 ),
                 LogEntry(
                     timestamp=datetime.now() - timedelta(minutes=8),
                     level="WARN",
                     logger="risk",
                     message="High volatility detected in NIFTY options",
-                    module="risk_monitor"
+                    module="risk_monitor",
                 ),
                 LogEntry(
                     timestamp=datetime.now() - timedelta(minutes=12),
                     level="INFO",
                     logger="auth",
                     message="Token refresh completed",
-                    module="auth_service"
+                    module="auth_service",
                 ),
                 LogEntry(
                     timestamp=datetime.now() - timedelta(minutes=15),
                     level="DEBUG",
                     logger="data",
                     message="Fetched 1247 instrument contracts",
-                    module="instrument_service"
-                )
+                    module="instrument_service",
+                ),
             ]
 
             logs_subset = recent_logs[:limit]
@@ -329,7 +328,7 @@ class DashboardService:
             logger.error(f"Failed to get recent logs: {e}")
             return []
 
-    async def _get_system_alerts(self) -> List[Dict[str, Any]]:
+    async def _get_system_alerts(self) -> list[dict[str, Any]]:
         """Get active system alerts"""
         try:
             alerts = []
@@ -337,20 +336,24 @@ class DashboardService:
             # Check system resource usage
             if self._system_metrics_cache:
                 if self._system_metrics_cache.cpu_usage_percent > 80:
-                    alerts.append({
-                        "id": "cpu_high",
-                        "level": "warning",
-                        "message": f"High CPU usage: {self._system_metrics_cache.cpu_usage_percent:.1f}%",
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    alerts.append(
+                        {
+                            "id": "cpu_high",
+                            "level": "warning",
+                            "message": f"High CPU usage: {self._system_metrics_cache.cpu_usage_percent:.1f}%",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
 
                 if self._system_metrics_cache.memory_usage_percent > 85:
-                    alerts.append({
-                        "id": "memory_high",
-                        "level": "warning",
-                        "message": f"High memory usage: {self._system_metrics_cache.memory_usage_percent:.1f}%",
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    alerts.append(
+                        {
+                            "id": "memory_high",
+                            "level": "warning",
+                            "message": f"High memory usage: {self._system_metrics_cache.memory_usage_percent:.1f}%",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
 
             return alerts
 
@@ -359,9 +362,7 @@ class DashboardService:
             return []
 
     async def get_positions_summary(
-        self,
-        symbol: Optional[str] = None,
-        expiry_date: Optional[str] = None
+        self, symbol: str | None = None, expiry_date: str | None = None
     ) -> PositionSummary:
         """
         Get aggregated portfolio position summary with real-time Greeks.
@@ -385,11 +386,7 @@ class DashboardService:
                 portfolio_gamma=Decimal("0.68"),
                 portfolio_theta=Decimal("-148.03"),
                 portfolio_vega=Decimal("258.46"),
-                concentration_risk={
-                    "NIFTY": 65.5,
-                    "BANKNIFTY": 25.2,
-                    "FINNIFTY": 9.3
-                }
+                concentration_risk={"NIFTY": 65.5, "BANKNIFTY": 25.2, "FINNIFTY": 9.3},
             )
 
             await self._cache.set_by_key(cache_key, summary, ttl=60)
@@ -397,7 +394,7 @@ class DashboardService:
 
         except Exception as e:
             logger.error(f"Failed to get positions summary: {e}")
-            raise DataQualityError(f"Positions data unavailable: {str(e)}")
+            raise DataQualityError(f"Positions data unavailable: {e!s}")
 
     async def calculate_risk_metrics(self) -> RiskMetrics:
         """
@@ -424,16 +421,12 @@ class DashboardService:
                 delta_limit_utilization=12.5,
                 gamma_limit_utilization=34.2,
                 vega_limit_utilization=25.8,
-                concentration_limits={
-                    "single_symbol": 35.0,
-                    "sector": 60.0,
-                    "expiry": 45.0
-                },
+                concentration_limits={"single_symbol": 35.0, "sector": 60.0, "expiry": 45.0},
                 stress_test_results={
                     "market_crash_2008": Decimal("-125000.00"),
                     "covid_crash_2020": Decimal("-89000.00"),
-                    "volatility_spike": Decimal("-67000.00")
-                }
+                    "volatility_spike": Decimal("-67000.00"),
+                },
             )
 
             await self._cache.set_by_key("risk_metrics", metrics, ttl=300)
@@ -441,7 +434,7 @@ class DashboardService:
 
         except Exception as e:
             logger.error(f"Risk calculation failed: {e}")
-            raise CalculationError(f"Risk metrics calculation failed: {str(e)}")
+            raise CalculationError(f"Risk metrics calculation failed: {e!s}")
 
     async def get_dashboard_config(self, user_id: str) -> DashboardConfig:
         """Get user dashboard configuration"""
@@ -459,19 +452,15 @@ class DashboardService:
                 alert_thresholds={
                     "portfolio_delta": 0.5,
                     "daily_pnl_loss": -10000.0,
-                    "margin_utilization": 80.0
-                }
+                    "margin_utilization": 80.0,
+                },
             )
         except Exception as e:
             logger.error(f"Failed to get dashboard config: {e}")
             # Return default config
             return DashboardConfig(user_id=user_id)
 
-    async def update_dashboard_config(
-        self,
-        user_id: str,
-        config: DashboardConfig
-    ) -> None:
+    async def update_dashboard_config(self, user_id: str, config: DashboardConfig) -> None:
         """Update user dashboard configuration"""
         try:
             # This would save to user preferences database
@@ -479,13 +468,9 @@ class DashboardService:
             await self._cache.clear()
         except Exception as e:
             logger.error(f"Failed to update dashboard config: {e}")
-            raise DataQualityError(f"Configuration update failed: {str(e)}")
+            raise DataQualityError(f"Configuration update failed: {e!s}")
 
-    async def recompute_analytics(
-        self,
-        symbol: str,
-        expiry_date: Optional[str] = None
-    ) -> None:
+    async def recompute_analytics(self, symbol: str, expiry_date: str | None = None) -> None:
         """
         Background task to recompute analytics using your existing processing pipeline.
         Integrates with MarketDataManager for consistent data processing.
@@ -505,7 +490,7 @@ class DashboardService:
                 option_interval="3minute",
                 spot_interval="3",
                 days_back=7,
-                strikes=1
+                strikes=1,
             )
 
             # Clear relevant caches
@@ -517,7 +502,9 @@ class DashboardService:
         except Exception as e:
             logger.error(f"Analytics recomputation failed: {e}", exc_info=True)
 
-    async def get_recent_logs_formatted(self, level: str = "INFO", lines: int = 100) -> List[Dict[str, Any]]:
+    async def get_recent_logs_formatted(
+        self, level: str = "INFO", lines: int = 100
+    ) -> list[dict[str, Any]]:
         """Get recent system logs with filtering"""
         try:
             logs = await self._get_recent_logs(limit=lines)
@@ -532,7 +519,7 @@ class DashboardService:
                     "timestamp": log.timestamp.strftime("%H:%M:%S"),
                     "level": log.level,
                     "message": log.message,
-                    "module": log.module or log.logger
+                    "module": log.module or log.logger,
                 }
                 for log in logs
             ]

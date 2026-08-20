@@ -6,11 +6,11 @@ and a domain-specific MarketDataCache with convenience methods.
 """
 
 import asyncio
-import time
 import logging
 import re
-from typing import Any, Optional, Dict, Pattern, Callable
-from datetime import datetime, timedelta
+import time
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,12 @@ class AsyncCache:
         self.ttl = ttl
         self.max_size = max_size
         # key -> dict(value=..., expires_at=..., created_at=..., last_accessed=..., access_count=...)
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._cleanup_task: asyncio.Task | None = None
         # ensure there's only one cleanup task per process
         self._cleanup_lock = asyncio.Lock()
 
-    async def get_by_key(self, key: str) -> Optional[Any]:
+    async def get_by_key(self, key: str) -> Any | None:
         """Async get by exact string key"""
         try:
             item = self._cache.get(key)
@@ -49,7 +49,7 @@ class AsyncCache:
             logger.error(f"Cache get_by_key error for key={key}: {e}")
             return None
 
-    async def set_by_key(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    async def set_by_key(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Async set by key"""
         try:
             effective_ttl = ttl if ttl is not None else self.ttl
@@ -135,7 +135,7 @@ class AsyncCache:
             # wait and try again later
             await asyncio.sleep(300)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         now = time.time()
         active_items = sum(1 for item in self._cache.values() if now < item["expires_at"])
         total_access_count = sum(item.get("access_count", 0) for item in self._cache.values())
@@ -158,7 +158,7 @@ class MarketDataCache(AsyncCache):
     and domain helper caches (option chains, greeks...) implemented async.
     """
 
-    def __init__(self, ttl: int = 30, max_size: int = 2000, max_cache_size: Optional[int] = None):
+    def __init__(self, ttl: int = 30, max_size: int = 2000, max_cache_size: int | None = None):
         # support `max_cache_size` alias for backwards compatibility
         if max_cache_size is not None:
             max_size = max_cache_size
@@ -175,8 +175,8 @@ class MarketDataCache(AsyncCache):
         access_token: str,
         interval: int,
         fetch_func: Callable[..., Any],
-        ttl: Optional[int] = None,
-        unit: Optional[str] = "minutes",
+        ttl: int | None = None,
+        unit: str | None = "minutes",
     ) -> Any:
         """
         Attempts to return cached timeseries data (usually a pd.DataFrame).
@@ -210,27 +210,41 @@ class MarketDataCache(AsyncCache):
             raise
 
     # Domain helper methods (async)
-    async def cache_option_chain(self, symbol: str, expiry: str, data: Any, ttl: Optional[int] = 30) -> bool:
+    async def cache_option_chain(
+        self, symbol: str, expiry: str, data: Any, ttl: int | None = 30
+    ) -> bool:
         key = f"option_chain::{symbol}::{expiry}"
         return await self.set_by_key(key, data, ttl=ttl)
 
-    async def get_option_chain(self, symbol: str, expiry: str) -> Optional[Any]:
+    async def get_option_chain(self, symbol: str, expiry: str) -> Any | None:
         key = f"option_chain::{symbol}::{expiry}"
         return await self.get_by_key(key)
 
-    async def cache_greeks(self, symbol: str, strike: str, expiry: str, option_type: str, greeks: Any, ttl: Optional[int] = 15) -> bool:
+    async def cache_greeks(
+        self,
+        symbol: str,
+        strike: str,
+        expiry: str,
+        option_type: str,
+        greeks: Any,
+        ttl: int | None = 15,
+    ) -> bool:
         key = f"greeks::{symbol}::{strike}::{expiry}::{option_type}"
         return await self.set_by_key(key, greeks, ttl=ttl)
 
-    async def get_greeks(self, symbol: str, strike: str, expiry: str, option_type: str) -> Optional[Any]:
+    async def get_greeks(
+        self, symbol: str, strike: str, expiry: str, option_type: str
+    ) -> Any | None:
         key = f"greeks::{symbol}::{strike}::{expiry}::{option_type}"
         return await self.get_by_key(key)
 
-    async def cache_volatility_surface(self, symbol: str, surface_data: Any, ttl: Optional[int] = 300) -> bool:
+    async def cache_volatility_surface(
+        self, symbol: str, surface_data: Any, ttl: int | None = 300
+    ) -> bool:
         key = f"vol_surface::{symbol}"
         return await self.set_by_key(key, surface_data, ttl=ttl)
 
-    async def get_volatility_surface(self, symbol: str) -> Optional[Any]:
+    async def get_volatility_surface(self, symbol: str) -> Any | None:
         key = f"vol_surface::{symbol}"
         return await self.get_by_key(key)
 

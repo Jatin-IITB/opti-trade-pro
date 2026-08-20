@@ -3,12 +3,15 @@ import json
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
+
 from ..config.settings import settings
+
 _lock = threading.Lock()
 _path = Path(settings.JOB_REGISTRY_PATH)
 
-def _load() -> Dict[str, Any]:
+
+def _load() -> dict[str, Any]:
     if not _path.exists():
         return {}
     try:
@@ -16,12 +19,14 @@ def _load() -> Dict[str, Any]:
     except Exception:
         return {}
 
-def _save(data: Dict[str, Any]):
+
+def _save(data: dict[str, Any]):
     tmp = _path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(_path)
 
-def create_job(symbol: str, params: Dict[str, Any]) -> str:
+
+def create_job(symbol: str, params: dict[str, Any]) -> str:
     job_id = str(uuid.uuid4())
     with _lock:
         data = _load()
@@ -38,7 +43,8 @@ def create_job(symbol: str, params: Dict[str, Any]) -> str:
         _save(data)
     return job_id
 
-def update_job(job_id: str, status: str, files: Optional[List[str]] = None, error: Optional[str] = None):
+
+def update_job(job_id: str, status: str, files: list[str] | None = None, error: str | None = None):
     with _lock:
         data = _load()
         if job_id not in data:
@@ -50,13 +56,16 @@ def update_job(job_id: str, status: str, files: Optional[List[str]] = None, erro
         if error:
             entry["error"] = error
         import datetime
+
         if status == "completed":
             entry["completed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
         _save(data)
 
+
 def get_jobs_for_symbol(symbol: str):
     data = _load()
     return [v for v in data.values() if v.get("symbol") == symbol]
+
 
 def get_job(job_id: str):
     data = _load()

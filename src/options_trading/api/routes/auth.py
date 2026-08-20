@@ -1,30 +1,35 @@
 # src/options_trading/api/routes/auth.py
 """FastAPI routes for authentication endpoints. Fixed OAuth2 flow with proper user ID handling and error fixes."""
+
 import logging
-from typing import Dict, Optional
-from urllib.parse import urlencode
-from datetime import datetime, timedelta
 import secrets
+from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ...config.settings import get_settings
 from ...models.auth import (
-    AuthStatus, OAuthCallbackRequest, OAuthCallbackResponse, TokenValidationResponse,
+    AuthStatus,
+    OAuthCallbackRequest,
+    OAuthCallbackResponse,
+    TokenValidationResponse,
 )
 from ...services.auth_service import AuthService
-from ...utils.exceptions import AuthError, TokenRefreshError
-from ...config.settings import get_settings
 from ...utils.auth_dependencies import get_current_user
+from ...utils.exceptions import AuthError, TokenRefreshError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 _OAUTH_STATE_TTL = 300
 
+
 def _ensure_pending_store(app):
     if not hasattr(app.state, "pending_oauth_states"):
         app.state.pending_oauth_states = {}
+
 
 def _prune_states(app):
     now = datetime.now()
@@ -33,11 +38,9 @@ def _prune_states(app):
     for k in expired:
         store.pop(k, None)
 
+
 @router.get("/login")
-async def initiate_login(
-    request: Request,
-    user_id: Optional[str] = "default"
-) -> RedirectResponse:
+async def initiate_login(request: Request, user_id: str | None = "default") -> RedirectResponse:
     """Initiate OAuth2 login flow."""
     settings = get_settings()
     _ensure_pending_store(request.app)
@@ -46,8 +49,16 @@ async def initiate_login(
     state_token = secrets.token_urlsafe(32)
     state = f"{user_id}:{state_token}"
     expires_at = datetime.now() + timedelta(seconds=_OAUTH_STATE_TTL)
-    request.app.state.pending_oauth_states[state_token] = {"user_id": user_id, "expires_at": expires_at}
-    logger.debug("Stored server-side oauth state for user=%s token=%s (expires %s)", user_id, state_token, expires_at.isoformat())
+    request.app.state.pending_oauth_states[state_token] = {
+        "user_id": user_id,
+        "expires_at": expires_at,
+    }
+    logger.debug(
+        "Stored server-side oauth state for user=%s token=%s (expires %s)",
+        user_id,
+        state_token,
+        expires_at.isoformat(),
+    )
 
     try:
         request.session["oauth_state"] = state
@@ -57,43 +68,52 @@ async def initiate_login(
             "response_type": "code",
             "client_id": settings.upstox_api_key,
             "redirect_uri": settings.oauth_redirect_uri,
-            "state": state
+            "state": state,
         }
         auth_url = f"https://api-v2.upstox.com/login/authorization/dialog?{urlencode(params)}"
         logger.info(f"Redirecting to OAuth2 authorization: {auth_url}")
 
         response = RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
-        response.set_cookie("oauth_state", state, max_age=_OAUTH_STATE_TTL, httponly=True, samesite="lax", path="/")
+        response.set_cookie(
+            "oauth_state", state, max_age=_OAUTH_STATE_TTL, httponly=True, samesite="lax", path="/"
+        )
         return response
     except Exception as e:
         logger.error(f"Failed to initiate login: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to initiate authentication")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initiate authentication",
+        )
+
 
 @router.get("/callback")
 async def oauth_callback(
     request: Request,
-    code: Optional[str] = None,
-    state: Optional[str] = None,
-    error: Optional[str] = None,
-    error_description: Optional[str] = None
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
 ) -> HTMLResponse:
     """Handle OAuth2 callback from Upstox with proper user ID handling."""
     if error:
         logger.error(f"OAuth2 error: {error} - {error_description}")
         return HTMLResponse(
             content=f"<b>Error:</b> {error}<br/><b>Description:</b> {error_description or 'Unknown error'}<br/>Please try again.",
-            status_code=status.HTTP_400_BAD_REQUEST
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
     if not code or not state:
         return HTMLResponse(
             content="No authorization code or state received. Please try again.",
-            status_code=status.HTTP_400_BAD_REQUEST
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
     try:
         user_id_part, state_token = state.split(":", 1)
     except ValueError:
         logger.error(f"Invalid state format: {state}")
-        return HTMLResponse("Invalid state parameter. Possible CSRF attack.", status_code=status.HTTP_400_BAD_REQUEST)
+        return HTMLResponse(
+            "Invalid state parameter. Possible CSRF attack.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     _ensure_pending_store(request.app)
     _prune_states(request.app)
@@ -114,7 +134,10 @@ async def oauth_callback(
 
     if not valid_state:
         logger.warning("State mismatch")
-        return HTMLResponse("Invalid state parameter. Possible CSRF attack.", status_code=status.HTTP_400_BAD_REQUEST)
+        return HTMLResponse(
+            "Invalid state parameter. Possible CSRF attack.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         async with AuthService() as auth_service:
@@ -133,8 +156,12 @@ async def oauth_callback(
             # Initialize services after auth (best-effort)
             try:
                 from ...utils.app_init import initialize_app_services
+
                 await initialize_app_services(request.app, access_token=token_info.access_token)
-                logger.info("Application services initialized after successful auth for user %s", actual_user_id)
+                logger.info(
+                    "Application services initialized after successful auth for user %s",
+                    actual_user_id,
+                )
             except Exception as e:
                 logger.warning("Service init after auth failed: %s", e)
 
@@ -150,15 +177,16 @@ async def oauth_callback(
     except AuthError as e:
         logger.error(f"Auth error during callback: {e}")
         return HTMLResponse(
-            content=f"Failed to exchange authorization code for tokens. Error: {str(e)}. Please try again.",
-            status_code=status.HTTP_400_BAD_REQUEST
+            content=f"Failed to exchange authorization code for tokens. Error: {e!s}. Please try again.",
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
     except Exception as e:
         logger.error(f"Unexpected error in OAuth callback: {e}", exc_info=True)
         return HTMLResponse(
             content="An unexpected error occurred during authentication. Please try again or contact support.",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
 
 @router.post("/callback/api", response_model=OAuthCallbackResponse)
 async def api_oauth_callback(callback: OAuthCallbackRequest) -> OAuthCallbackResponse:
@@ -166,11 +194,14 @@ async def api_oauth_callback(callback: OAuthCallbackRequest) -> OAuthCallbackRes
         async with AuthService() as auth_service:
             token_info = await auth_service.exchange_code_for_tokens(callback)
             return OAuthCallbackResponse(
-                success=True, message="Authentication successful", access_token=token_info.access_token
+                success=True,
+                message="Authentication successful",
+                access_token=token_info.access_token,
             )
     except AuthError as e:
         logger.error(f"API OAuth2 callback failed: {e}")
-        return OAuthCallbackResponse(success=False, message=f"Authentication failed: {str(e)}")
+        return OAuthCallbackResponse(success=False, message=f"Authentication failed: {e!s}")
+
 
 @router.get("/status", response_model=AuthStatus)
 async def get_auth_status(request: Request) -> AuthStatus:
@@ -187,7 +218,11 @@ async def get_auth_status(request: Request) -> AuthStatus:
             return await auth_service.get_auth_status(user_id)
     except Exception as e:
         logger.error(f"Failed to get auth status: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve authentication status")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve authentication status",
+        )
+
 
 @router.post("/validate", response_model=TokenValidationResponse)
 async def validate_token(access_token: str) -> TokenValidationResponse:
@@ -204,10 +239,11 @@ async def validate_token(access_token: str) -> TokenValidationResponse:
                 return TokenValidationResponse(valid=False, error="Token is invalid or expired")
     except Exception as e:
         logger.error(f"Token validation failed: {e}")
-        return TokenValidationResponse(valid=False, error=f"Validation error: {str(e)}")
+        return TokenValidationResponse(valid=False, error=f"Validation error: {e!s}")
+
 
 @router.post("/refresh")
-async def refresh_token(refresh_token: str, user_id: str = "default") -> Dict[str, str]:
+async def refresh_token(refresh_token: str, user_id: str = "default") -> dict[str, str]:
     try:
         async with AuthService() as auth_service:
             token_info = await auth_service.refresh_token(refresh_token, user_id)
@@ -215,14 +251,17 @@ async def refresh_token(refresh_token: str, user_id: str = "default") -> Dict[st
                 "access_token": token_info.access_token,
                 "expires_at": token_info.expires_at.isoformat(),
                 "user_id": token_info.user_id,
-                "message": "Token refreshed successfully"
+                "message": "Token refreshed successfully",
             }
     except TokenRefreshError as e:
         logger.error(f"Token refresh failed: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Token refresh failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Token refresh failed: {e!s}"
+        )
+
 
 @router.post("/logout")
-async def logout(request: Request) -> Dict[str, str]:
+async def logout(request: Request) -> dict[str, str]:
     try:
         authenticated_user_id = request.session.get("authenticated_user_id", "default")
         async with AuthService() as auth_service:
@@ -231,8 +270,11 @@ async def logout(request: Request) -> Dict[str, str]:
         return {"message": "Logged out successfully"}
     except Exception as e:
         logger.error(f"Logout failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Logout failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Logout failed"
+        )
+
 
 @router.get("/profile")
-async def get_profile(user: Dict = Depends(get_current_user)) -> Dict:
+async def get_profile(user: dict = Depends(get_current_user)) -> dict:
     return user

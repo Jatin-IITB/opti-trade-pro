@@ -1,8 +1,12 @@
 # src/options_trading/api/tools/option_chain_live.py
 import requests
+
 from ...config.settings import settings
 from ...utils.exceptions import APIError, DataQualityError
-URL=settings.upstox_option_chain_url
+
+URL = settings.upstox_option_chain_url
+
+
 def fetch_live_option_chain(instrument_key: str, expiry_date: str, access_token: str) -> dict:
     headers = {
         "Accept": "application/json",

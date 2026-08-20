@@ -1,16 +1,20 @@
 # api/pick_strikes.py
 
+
 import pandas as pd
-from typing import List
 from fastapi import Query
+
 from ...config.settings import settings
-DEFAULT_STRIKES=Query(settings.default_strikes)
+
+DEFAULT_STRIKES = Query(settings.default_strikes)
+
+
 def pick_near_the_money_contracts(
     df_contracts: pd.DataFrame,
     spot_price: float,
     num_itm: int = DEFAULT_STRIKES,
-    num_otm: int = DEFAULT_STRIKES
-) -> List[str]:
+    num_otm: int = DEFAULT_STRIKES,
+) -> list[str]:
     """
     Pick near-the-money ATM, ITM, and OTM option contract instrument_keys for both calls and puts.
     Returns a list of contract indices for targeted strikes.

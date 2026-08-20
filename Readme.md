@@ -1,280 +1,167 @@
-# README.md
-# 🚀 Options Trading Platform v2.0
+# OptiTrade Pro — Derivatives Pricing & Risk Engine
 
-A modern, production-ready options trading platform built with FastAPI, featuring Black-Scholes calculations, gamma scalping strategies, and real-time market data integration with Upstox.
+A production-grade options analytics stack in two layers:
 
-## ✨ Features
+- **`optitrade`** — a standalone quant core (numpy/scipy only, strictly typed, event-journaled):
+  vol surfaces, Greeks, hedging, and pre-trade risk.
+- **`options_trading`** — a FastAPI platform (Upstox OAuth, market data, dashboards) that
+  consumes the core through thin adapters.
 
-### 🔐 **Authentication & Security**
-- OAuth2 integration with Upstox
-- Secure token storage with keyring support
-- Encrypted fallback storage
-- Multi-user support
-- Automatic token refresh
+Every quantitative claim below names the test that enforces it (CLAUDE.md rule 8 — docs
+state only test-enforced facts).
 
-### 📊 **Market Data & Analytics**
-- Real-time options and spot data from Upstox
-- Black-Scholes pricing and Greeks calculation
-- Implied volatility calculation
-- Realized volatility analysis (Garman-Klass & Parkinson)
-- Historical data processing
+## The four engines
 
-### 🎯 **Trading Strategies**
-- Gamma scalping framework
-- Strike selection algorithms
-- Risk management tools
-- Brokerage and margin calculations
+| Engine | What it does | Verified behaviour |
+|---|---|---|
+| **Vol surface** | Newton–Raphson/Brent IV stripping; natural cubic-spline smiles in log-moneyness; per-expiry SABR (Hagan 2002, fixed β, seeded multi-start least-squares); calendar interpolation in total variance; Breeden–Litzenberger butterfly + calendar no-arb validation | SABR round-trip RMSE **< 0.3 vol-pt** on noisy synthetic smiles — `tests/unit/quant/test_sabr.py` |
+| **Surface v2 (eSSVI)** | SSVI with power-law φ calibrated **jointly across all expiries** (Gatheral–Jacquier 2014); θ monotone by construction, butterfly conditions as in-fit penalties; Durrleman g(k) ≥ 0 validation; **risk-neutral density gate** (pdf ≥ 0, ∫≈1, mean ≈ forward); SABR reported as benchmark on every fit | Joint round-trip RMSE **0.076 vol-pt** with **0 Durrleman violations** — `test_essvi.py`; density gate — `test_density.py` |
+| **Greeks** | Three independent methods: vectorised analytic BS, model-agnostic central finite differences, and a from-scratch tape-based **adjoint AD** engine (one backward pass → all first-order Greeks); fully broadcast ΔS×Δσ×Δt scenario revaluation | Methods agree pairwise across a parameter sweep — `test_greeks_cross.py`; **539-cell grid × 50 positions < 200 ms** — `test_scenario.py` (benchmark marker) |
+| **Hedging** | Whalley–Wilmott (1997) no-transaction band (stochastic-control optimal under proportional costs); gamma scalping modulates the band by the realized/implied vol ratio (EWMA RV); Taylor P&L attribution | GBM hedging sim: mean P&L ≈ 0 at realized = implied, hedged P&L tracks theoretical theta; long-gamma earns when RV > IV — `test_hedging_sim.py` |
+| **Risk** | Fail-closed pre-trade engine: Greeks caps, margin sufficiency, drawdown **halt**, concentration **resize**; verdict precedence HALT > REJECT > RESIZE > APPROVE; every decision journaled with plain-English, number-bearing reasons | Property-tested: **no limit-breaching order is ever approved**, including when a check itself crashes — `test_risk.py` |
 
-### 🏗️ **Modern Architecture**
-- FastAPI with async support
-- Pydantic models for data validation
-- Comprehensive error handling
-- Structured logging
-- Type hints throughout
-- 90%+ test coverage
+Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/roadmap.md)):
 
-## 🚀 Quick Start
+- **Data spine** (`optitrade.data`) — NSE-reality quote filters (crossed books, stale
+  quotes, wide spreads, zero-bid wings) with per-reason audit stats, and a
+  schema-versioned Parquet snapshot store with lossless round-trips
+  (`test_quote_filters.py`, `test_snapshot_store.py`, ADR-013).
+- **P&L explain** (`optitrade.explain`) — daily decomposition into theta carry, gamma vs
+  realized variance, vega per PCA surface factor (level/term/skew), vanna/volga, and
+  residual; `explained_fraction` is the headline metric; expiry-bucketed exposure reports
+  (`test_pnl_explain.py`, `test_factors.py`, `test_bucket_report.py`, ADR-014).
+- **MCP server** (`optitrade.mcp_server`, extra `[mcp]`) — the engines exposed as agent
+  tools (`price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`);
+  every tool call journaled so agent claims have something to cite (ADR-015).
+- **Groundedness audit** (`optitrade.audit`) — deterministic auditor: an agent claim is
+  trusted only if every number it states matches the journal events it cites
+  (`test_groundedness.py`). No LLM in the money path, ever.
+- **Strategy + backtest** (`optitrade.strategy`, `optitrade.backtest`) — VRP harvesting
+  behind a `Strategy` protocol shared by backtester and live desk (backtested code *is*
+  production decision code); typed Indian cost model (STT/exchange/GST/SEBI/stamp/
+  brokerage, per-fill breakdowns); walk-forward evaluation reporting out-of-sample **and
+  deflated** Sharpe (Bailey–López de Prado) with honest trial accounting. Economic ground
+  truths enforced: positive synthetic VRP ⇒ profit, zero VRP ⇒ zero trades, a tight vega
+  cap blocks 100% of entries (`test_walk_forward.py`, `test_dsr.py`, `test_costs.py`,
+  ADR-016/017).
+- **Paper desk** (`optitrade.desk`) — `run_daily_cycle`: mark → strategy → debate →
+  fail-closed risk → paper fill → WW hedge → journal, with a file-based **kill switch**
+  a drawdown HALT engages automatically; self-auditing analyst agents (Surface Auditor,
+  Post-Mortem) that must ground at 100% against the journal before reporting
+  (`test_daily_cycle.py`, `test_analysts.py`, ADR-018).
+- **Live capture** (`options_trading` → `/api/v1/capture/*`) — Upstox chains through the
+  quote filters into the Parquet store; clean history accumulates per run
+  (`tests/unit/test_capture_service.py`). The **scheduler**
+  (`/capture/schedule/start|stop|status`) runs it unattended inside the IST market window
+  — injected-clock tested, one bad capture never kills the loop, operator-started by
+  design (`test_capture_scheduler.py`, ADR-019).
+- **Real-history replay + drift** — `StoreReplay` turns captured Parquet into the same
+  `MarketDay`s the synthetic replay emits, so the walk-forward harness runs on real data
+  unchanged; `backtest_vs_desk_drift` runs backtester and paper desk over identical days
+  with the identical strategy and reports the execution-model gap in bps
+  (`test_store_replay.py`, `test_reconcile.py`, ADR-019).
+- **Daily report** (`optitrade.desk.report`) — one markdown artifact per run: desk
+  summary + every analyst whose source events exist, each section groundedness-scored,
+  skipped analysts listed rather than hidden (`test_daily_report.py`, ADR-020). Emitted
+  automatically by `optitrade cycle`.
+- **LLM agent adapters** (`optitrade.agents`) — hybrid LLM analysts mirror the
+  deterministic roster: `LLMSurfaceAnalyst`, `LLMRegimeAnalyst`,
+  `LLMPostMortemAnalyst`, each producing deterministic claims with LLM-generated
+  narrative. The `LLMBackend` protocol abstracts the LLM provider (`DspyBackend`
+  wraps dspy, tests use plain mocks); the `AnalystOrchestrator` runs both tiers
+  and captures failures without propagating. Groundedness invariant preserved:
+  100% with mock backends (`test_llm_analyst.py`, `test_orchestrator.py`, ADR-021).
+- **Research loop** (`optitrade.research`) — propose parameter changes → walk-forward
+  evaluates → rank → journal. `GridSearchAgent` (deterministic grid) and
+  `LLMResearchAgent` (structured JSON from LLM) produce `ResearchProposal`s;
+  `ProposalEvaluator` compares each against a cached baseline via walk-forward
+  with deflated Sharpe; `ResearchLoop` orchestrates the cycle. Accepted proposals
+  generate `research_accepted` journal events for governance review — the loop
+  surfaces candidates, never applies them. MCP `run_experiment` tool provides
+  backtest-as-tool for agents (`test_research_agent.py`,
+  `test_research_evaluator.py`, `test_research_loop.py`, ADR-022).
 
-### Prerequisites
-- Python 3.11 or higher
-- Upstox Developer Account ([Get API Keys](https://developer.upstox.com/))
-- Redis (optional, for caching)
+And the connective tissue the engines report through:
 
-### Installation
+- **Event journal** (`optitrade.journal`) — append-only JSONL, monotonic sequences,
+  correlation IDs; a run replays as evidence (`test_journal.py`).
+- **Governance** (`optitrade.governance`) — every trade proposal is debated by a
+  deterministic expert panel (risk officer / strategy / execution) with confidence-weighted
+  consensus and a confident-veto rule; dissents preserved in the journaled decision record
+  (`test_governance.py`). LLM experts are an optional extra (`pip install ".[agentic]"`).
+- **Attribution** (`optitrade.attribution`) — exact Shapley values for fair P&L credit
+  across strategies (`test_shapley.py`).
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/options-trading-platform.git
-   cd options-trading-platform
-   ```
-
-2. **Create virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -e .
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your Upstox API credentials
-   ```
-
-5. **Install pre-commit hooks (optional)**
-   ```bash
-   pre-commit install
-   ```
-
-### Configuration
-
-Edit your `.env` file with your Upstox credentials:
-
-```env
-UPSTOX_API_KEY=your_api_key_here
-UPSTOX_SECRET_KEY=your_secret_key_here
-OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
-SECRET_KEY=your-secure-secret-key
-```
-
-### Running the Application
-
-```bash
-# Start the FastAPI server
-uvicorn src.options_trading.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The API will be available at `http://localhost:8000`
-- API Documentation: `http://localhost:8000/docs`
-- Alternative Docs: `http://localhost:8000/redoc`
-
-## 📖 API Documentation
-
-### Authentication Endpoints
-
-- `GET /auth/login` - Initiate OAuth2 login
-- `GET /auth/callback` - Handle OAuth2 callback
-- `GET /auth/status` - Check authentication status
-- `POST /auth/refresh` - Refresh access token
-- `POST /auth/logout` - Logout user
-
-### Market Data Endpoints
-
-- `GET /market/instruments` - Get instrument information
-- `GET /market/expiries` - Get available expiry dates
-- `GET /market/contracts` - Get option contracts
-- `GET /market/candles` - Get historical OHLCV data
-
-## 🧪 Testing
+## Quick start
 
 ```bash
-# Run all tests
-pytest
+uv venv --python 3.12 && uv pip install -e ".[dev]"   # or: pip install -e ".[dev]"
 
-# Run with coverage
-pytest --cov=src/options_trading --cov-report=html
+optitrade demo         # end-to-end synthetic run: chain → surface → Greeks →
+                       # debate → risk review → hedging sim, journaled to ./runtime_data
+optitrade cycle        # paper desk over a synthetic market: strategy → debate →
+                       # fail-closed risk → paper fills → WW hedging → kill switch
+optitrade research     # research loop: grid-search proposals → walk-forward →
+                       # ranked results with Sharpe and deflated Sharpe
 
-# Run specific test categories
-pytest -m "unit"          # Unit tests only
-pytest -m "integration"   # Integration tests only
-pytest -m "auth"          # Authentication tests only
+pytest -q              # full suite (deterministic, seeded)
+pytest -q -m benchmark # latency targets (run locally; excluded on shared CI runners)
 ```
 
-## 📁 Project Structure
-
-```
-src/options_trading/
-├── __init__.py
-├── models/              # Pydantic models
-│   ├── auth.py         # Authentication models
-│   └── market.py       # Market data models
-├── services/           # Business logic
-│   ├── auth_service.py # Authentication service
-│   └── market_service.py # Market data service
-├── api/               # FastAPI routes
-│   └── routes/
-│       ├── auth.py    # Auth endpoints
-│       └── market.py  # Market endpoints
-├── config/            # Configuration
-│   └── settings.py    # Pydantic settings
-└── utils/             # Utilities
-    ├── exceptions.py  # Custom exceptions
-    └── security.py    # Security utilities
-```
-
-## 🔧 Development
-
-### Code Quality
-
-This project uses several tools to maintain code quality:
-
-- **Black** - Code formatting
-- **isort** - Import sorting
-- **flake8** - Linting
-- **mypy** - Type checking
-- **pre-commit** - Git hooks
-
-Run quality checks:
-```bash
-# Format code
-black src/ tests/
-
-# Sort imports
-isort src/ tests/
-
-# Lint code
-flake8 src/ tests/
-
-# Type checking
-mypy src/
-```
-
-### Development Environment
+Run the platform (needs Upstox credentials in `.env`, see `.env.example`):
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Set up pre-commit hooks
-pre-commit install
-
-# Run pre-commit on all files
-pre-commit run --all-files
+uvicorn options_trading.main:app --reload --port 8000
+# docs at http://localhost:8000/docs — quant endpoints under /api/v1/analytics/*
 ```
 
-## 🐳 Docker Support
+Docker:
 
 ```bash
-# Build image
-docker build -t options-trading-platform .
-
-# Run container
-docker run -p 8000:8000 --env-file .env options-trading-platform
-
-# Use docker-compose
-docker-compose up -d
+docker build -t optitrade-pro . && docker run -p 8000:8000 --env-file .env optitrade-pro
 ```
 
-## 📊 Monitoring & Logging
+## Analytics API (platform → core adapters)
 
-The platform includes comprehensive logging and monitoring:
+- `POST /api/v1/analytics/surface` — chain in, spline+SABR surface out, with per-expiry SABR
+  params, fit RMSE, and any no-arbitrage violations
+- `POST /api/v1/analytics/greeks` — book in, aggregate + per-position Greeks out
+- `POST /api/v1/analytics/scenarios` — ΔS×Δσ×Δt P&L cube with worst/best cells and timing
+- `POST /api/v1/analytics/hedge/decide` — Whalley–Wilmott band decision with rationale
+- `POST /api/v1/analytics/risk/review` — fail-closed pre-trade verdict with per-check reasons
 
-- **Structured logging** with JSON format
-- **Prometheus metrics** endpoint at `/metrics`
-- **Health check** endpoint at `/health`
-- **Request tracing** with correlation IDs
+## How decisions are made (in the code and about the code)
 
-## 🔒 Security Features
+The same debate → consensus → recorded-decision mechanism runs at two timescales:
 
-- **Token encryption** with Fernet
-- **Keyring integration** for secure storage
-- **Rate limiting** on API endpoints
-- **Input validation** with Pydantic
-- **SQL injection protection**
-- **CORS configuration**
+- **Runtime**: `DebatePanel` + `RiskEngine` journal every trade decision with reasons and
+  correlation IDs (ADR-008, ADR-009, ADR-010).
+- **Engineering**: contested design choices get a debate record in `docs/debates/` and land
+  as a numbered ADR in `docs/adr/` (ADR-001; process in `docs/governance.md`).
 
-## 📈 Performance
+Start with [docs/architecture.md](docs/architecture.md), then the ADR index in
+[docs/adr/](docs/adr/). Engineering standards: [CLAUDE.md](CLAUDE.md).
 
-- **Async/await** throughout for high concurrency
-- **Connection pooling** for database and Redis
-- **Caching** with Redis for market data
-- **Background tasks** for data processing
-- **Compression** for data storage
+## Project structure
 
-## 🚀 Deployment
+```
+src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker deps)
+  core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/
+  attribution/ backtest/ data/ explain/ audit/ strategy/ desk/
+  agents/ research/ mcp_server.py
+src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
+tests/unit/quant/         the enforcing tests referenced throughout this README
+docs/adr/                 architecture decision records (ADR-001…022)
+docs/debates/             expert-debate records behind the contested ADRs
+```
 
-### Production Checklist
+## Conventions
 
-- [ ] Set `ENVIRONMENT=production` in `.env`
-- [ ] Use strong `SECRET_KEY`
-- [ ] Configure HTTPS redirect URI
-- [ ] Set up production database
-- [ ] Configure Redis cluster
-- [ ] Enable logging to external service
-- [ ] Set up monitoring and alerts
-- [ ] Configure backup strategy
+Year-fraction time (ACT/365), continuously compounded rates, decimal vols, vega per unit
+vol, theta per year, signed quantities (ADR-003). Toolchain: ruff + tiered mypy + pytest
+with deterministic seeds (ADR-004). Conventional Commits; branch from `main`.
 
-### Environment Variables
+## License & disclaimer
 
-See `.env.example` for all available configuration options.
-
-## 📚 Documentation
-
-- [API Documentation](docs/api.md)
-- [Authentication Guide](docs/auth.md)
-- [Market Data Guide](docs/market-data.md)
-- [Trading Strategies](docs/strategies.md)
-- [Deployment Guide](docs/deployment.md)
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Run quality checks
-6. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙋‍♂️ Support
-
-- 📧 Email: gjatin145@gmail.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/options-trading-platform/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/options-trading-platform/discussions)
-
-## 🏆 Acknowledgments
-
-- [Upstox](https://upstox.com/) for the trading API
-- [FastAPI](https://fastapi.tiangolo.com/) for the web framework
-- [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
-
----
-
-**⚠️ Disclaimer**: This software is for educational and research purposes only. Trading in financial markets involves substantial risk. Always consult with a qualified financial advisor before making investment decisions.
+MIT. This software is for research and education. Options trading involves substantial
+risk; nothing here is investment advice.
