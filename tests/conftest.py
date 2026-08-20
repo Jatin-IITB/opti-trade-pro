@@ -19,6 +19,8 @@ import pytest_asyncio
 # fields harmless defaults so the suite runs without a .env (CI included).
 os.environ.setdefault("UPSTOX_API_KEY", "test_api_key")
 os.environ.setdefault("UPSTOX_SECRET_KEY", "test_secret_key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-ci")
+os.environ.setdefault("DEBUG", "true")
 
 from options_trading.models.auth import TokenInfo
 from options_trading.services.auth_service import AuthService
