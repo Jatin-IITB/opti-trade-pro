@@ -12,7 +12,7 @@ and propose only.**
 - Hedging: Whalley–Wilmott bands + RV/IV gamma scalping + GBM sim (ADR-007)
 - Risk: fail-closed pre-trade engine (ADR-008); journal (ADR-009); debate panel (ADR-010)
 
-## Phase status (2026-08-18)
+## Phase status (2026-08-20)
 
 | Phase | State |
 |---|---|
@@ -21,8 +21,8 @@ and propose only.**
 | 2 AAD + P&L explain | **Partial** — P&L explain + PCA factors + bucket reports built; JAX AAD revisit trigger still per ADR-006 |
 | 3 Strategy + backtest | **Built** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); `StoreReplay` runs it on real history as it accumulates |
 | 4 Paper loop | **Built** — daily cycle, kill switch, daily report, backtest-vs-desk drift metric (ADR-018/019/020); remaining: wire cycle to live captures on a schedule, drive drift toward zero |
-| 5 Agent layer | **Deterministic roster complete** — MCP server, groundedness auditor, all four analysts (Surface, Regime, Risk Officer, Post-Mortem); remaining: LLM adapters over the same rails |
-| 6 Research loop | Not started (gated on real history) |
+| 5 Agent layer | **Complete** — MCP server, groundedness auditor, all four deterministic analysts, LLM adapters over the same rails (`LLMBackend` protocol, `DspyBackend`, `AnalystOrchestrator`), MCP `run_experiment` tool (ADR-021) |
+| 6 Research loop | **Built** — `GridSearchAgent` + `LLMResearchAgent` propose, `ProposalEvaluator` runs walk-forward, `ResearchLoop` orchestrates → rank → journal; human approval gate before config changes land as ADRs; `optitrade research` CLI (ADR-022) |
 
 ## Phase detail
 

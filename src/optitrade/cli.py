@@ -388,6 +388,87 @@ def cycle(days: int, seed: int, journal_dir: Path) -> int:
     return 0
 
 
+def research(days: int, seed: int, max_proposals: int, journal_dir: Path) -> int:
+    """Run the research loop: grid-search proposals evaluated via walk-forward.
+
+    Each proposal varies one VRP parameter from the baseline, runs walk-forward
+    on a synthetic market, and reports OOS Sharpe and deflated Sharpe. Accepted
+    proposals (Sharpe improvement >= 0.5) are journaled for governance review.
+    """
+    from optitrade.backtest.market_replay import SyntheticVRPMarket
+    from optitrade.backtest.walk_forward import BacktestConfig
+    from optitrade.hedging.band import BandParams
+    from optitrade.research import GridSearchAgent, ProposalEvaluator, ResearchLoop
+    from optitrade.risk.limits import RiskLimits
+    from optitrade.strategy.vrp import VRPConfig
+
+    run_id = f"research-{time.strftime('%Y%m%d-%H%M%S')}"
+    journal = EventLog(journal_dir, run_id)
+    print(f"OptiTrade Pro {optitrade.__version__} — research loop {run_id}\n")
+
+    market = SyntheticVRPMarket(
+        n_days=max(days, 20),
+        spot=SPOT,
+        rate=RATE,
+        realized_vol=0.18,
+        vrp=0.06,
+        seed=seed,
+    )
+    replay_days = list(market)
+    baseline = VRPConfig(quantity=4.0)
+    bt_config = BacktestConfig(
+        risk_limits=RiskLimits(
+            max_abs_delta=500.0,
+            max_abs_gamma=50.0,
+            max_abs_vega=5_000.0,
+            max_drawdown=0.15,
+            max_concentration=1.0,
+        ),
+        band_params=BandParams(proportional_cost=5e-4, risk_aversion=1.0),
+        lot_size=50,
+    )
+    agent = GridSearchAgent(steps=(0.5, 0.75, 1.5, 2.0))
+    evaluator = ProposalEvaluator(
+        replay_days=replay_days,
+        backtest_config=bt_config,
+        baseline_config=baseline,
+        lot_size=50,
+        min_improvement=0.5,
+        journal=journal,
+    )
+    loop = ResearchLoop(agent=agent, evaluator=evaluator, journal=journal)
+
+    print(
+        f"[research] baseline: entry_vrp_min={baseline.entry_vrp_min}, "
+        f"quantity={baseline.quantity}, structure={baseline.structure}"
+    )
+    print(f"[research] evaluating proposals over {len(replay_days)} synthetic days...\n")
+
+    report = loop.run(baseline, max_proposals=max_proposals)
+
+    print(
+        f"[research] baseline OOS Sharpe: {report.baseline_sharpe:.4f}, "
+        f"DSR: {report.baseline_dsr:.4f}"
+    )
+    print(
+        f"[research] evaluated {len(report.experiments)} proposals, "
+        f"{len(report.accepted)} accepted\n"
+    )
+
+    for rank, exp in enumerate(report.ranked, 1):
+        status = "ACCEPTED" if exp.accepted else "rejected"
+        print(f"  #{rank:02d} [{status}] {exp.proposal.thesis}")
+        print(
+            f"      Sharpe {exp.candidate_sharpe:+.4f} (Δ {exp.improvement_sharpe:+.4f}), "
+            f"DSR {exp.candidate_dsr:.4f} (Δ {exp.improvement_dsr:+.4f}), "
+            f"trades {exp.candidate_n_trades}"
+        )
+
+    n_events = sum(1 for _ in journal.replay())
+    print(f"\n[journal] {n_events} events → {journal_dir / (run_id + '.jsonl')}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="optitrade", description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -397,6 +478,11 @@ def main() -> int:
     cycle_p.add_argument("--days", type=int, default=20)
     cycle_p.add_argument("--seed", type=int, default=11)
     cycle_p.add_argument("--journal-dir", type=Path, default=Path("runtime_data"))
+    research_p = sub.add_parser("research", help="run the research loop: propose → evaluate → rank")
+    research_p.add_argument("--days", type=int, default=60)
+    research_p.add_argument("--seed", type=int, default=42)
+    research_p.add_argument("--max-proposals", type=int, default=12)
+    research_p.add_argument("--journal-dir", type=Path, default=Path("runtime_data"))
     sub.add_parser("version", help="print version")
     args = parser.parse_args()
 
@@ -406,6 +492,8 @@ def main() -> int:
     journal_dir = getattr(args, "journal_dir", Path("runtime_data"))
     if args.command == "cycle":
         return cycle(args.days, args.seed, journal_dir)
+    if args.command == "research":
+        return research(args.days, args.seed, args.max_proposals, journal_dir)
     return demo(journal_dir)
 
 

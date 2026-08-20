@@ -24,14 +24,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from optitrade.backtest.market_replay import SyntheticVRPMarket
+from optitrade.backtest.walk_forward import BacktestConfig, run_walk_forward
 from optitrade.core.types import Greeks, OptionType, Order, Portfolio
 from optitrade.greeks.scenario import BookPosition, ScenarioGrid, run_scenario_grid
+from optitrade.hedging.band import BandParams
 from optitrade.journal.event_log import EventLog
 from optitrade.journal.events import Event
 from optitrade.pricing.black_scholes import bs_greeks_at, bs_price
 from optitrade.risk.checks import RiskContext
 from optitrade.risk.engine import RiskEngine
 from optitrade.risk.limits import RiskLimits
+from optitrade.strategy.vrp import VRPConfig, VRPStrategy
 
 _DEFAULT_JOURNAL_DIR = Path("runtime_data")
 _MCP_INSTALL_HINT = (
@@ -244,7 +248,75 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         _journal_call("journal_tail", {"n": n}, {"returned": len(tail)})
         return tail
 
-    return (price_option, book_greeks, run_scenarios, review_order, journal_tail)
+    def run_experiment(
+        config: dict[str, Any],
+        n_days: int = 40,
+        spot: float = 100.0,
+        rate: float = 0.05,
+        realized_vol: float = 0.18,
+        vrp: float = 0.06,
+        seed: int = 42,
+    ) -> dict[str, Any]:
+        """Run a walk-forward backtest with a proposed VRP config (backtest-as-tool).
+
+        The agent proposes parameter changes via ``config`` (a dict of
+        VRPConfig fields); the tool runs walk-forward over a synthetic
+        market and returns the out-of-sample Sharpe and deflated Sharpe.
+        The experiment result is journaled so subsequent claims can cite it.
+        """
+        vrp_config = VRPConfig(**{k: v for k, v in config.items() if v is not None})
+        market = SyntheticVRPMarket(
+            n_days=max(n_days, 20),
+            spot=spot,
+            rate=rate,
+            realized_vol=realized_vol,
+            vrp=vrp,
+            seed=seed,
+        )
+        days = list(market)
+        bt_config = BacktestConfig(
+            risk_limits=RiskLimits(
+                max_abs_delta=500.0,
+                max_abs_gamma=50.0,
+                max_abs_vega=5_000.0,
+                max_drawdown=0.15,
+                max_concentration=1.0,
+            ),
+            band_params=BandParams(proportional_cost=5e-4, risk_aversion=1.0),
+            lot_size=50,
+        )
+
+        def strategy_factory(cfg: VRPConfig) -> VRPStrategy:
+            return VRPStrategy(cfg, lot_size=50)
+
+        wf = run_walk_forward(
+            strategy_factory=strategy_factory,
+            param_grid=[vrp_config],
+            replay=days,
+            config=bt_config,
+            n_folds=2,
+            train_frac=0.6,
+        )
+        result = {
+            "oos_sharpe": wf.oos_sharpe,
+            "deflated_sharpe": wf.deflated_sharpe,
+            "n_trials": wf.n_trials,
+            "n_oos_days": int(wf.oos_daily_pnl.size),
+            "config": config,
+        }
+        args = {
+            "config": config,
+            "n_days": n_days,
+            "spot": spot,
+            "rate": rate,
+            "realized_vol": realized_vol,
+            "vrp": vrp,
+            "seed": seed,
+        }
+        _journal_call("run_experiment", args, result)
+        return result
+
+    return (price_option, book_greeks, run_scenarios, review_order, journal_tail, run_experiment)
 
 
 def create_server(journal_dir: Path = _DEFAULT_JOURNAL_DIR, run_id: str | None = None) -> Any:

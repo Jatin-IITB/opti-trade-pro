@@ -4,6 +4,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: SemVer.
 
 ## [3.0.0] — Unreleased (feature/production-rebuild)
 
+### Added (wave 5 — LLM agent adapters, research loop)
+- `agents/`: `LLMBackend` protocol + `DspyBackend` wrapping dspy.ChainOfThought;
+  three LLM analysts (`LLMSurfaceAnalyst`, `LLMRegimeAnalyst`,
+  `LLMPostMortemAnalyst`) — hybrid design: deterministic claims, LLM-generated
+  narrative, 100% groundedness invariant preserved; `AnalystOrchestrator` runs
+  both deterministic and LLM tiers, captures failures (ADR-021).
+- `research/`: `ResearchProposal`, `ExperimentResult`, `ResearchReport` types;
+  `ProposalEvaluator` wraps walk-forward for baseline-vs-candidate comparison
+  (cached baseline, journaled results); `GridSearchAgent` (deterministic:
+  varies one parameter at a time) and `LLMResearchAgent` (parses structured
+  JSON from LLM); `ResearchLoop` orchestrates propose → evaluate → rank →
+  journal; human approval gate — loop surfaces candidates, never applies them
+  (ADR-022).
+- MCP `run_experiment` tool: backtest-as-tool for agents; takes a VRPConfig
+  dict, runs walk-forward, journals and returns OOS Sharpe + DSR.
+- CLI `optitrade research`: grid-search proposals evaluated via walk-forward
+  over synthetic market, prints ranked results.
+- Governance: ADR-021/022, debate records for LLM agent architecture and
+  research loop design.
+
 ### Added (wave 4 — unattended capture, real-history replay, drift, daily report)
 - `CaptureScheduler` + `/api/v1/capture/schedule/*`: unattended chain capture inside the
   IST market window; injected clock/sleeper, failure-tolerant loop, operator-started

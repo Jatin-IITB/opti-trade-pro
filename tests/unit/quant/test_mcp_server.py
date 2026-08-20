@@ -15,7 +15,7 @@ from optitrade.journal import EventLog
 
 _HAS_MCP = importlib.util.find_spec("mcp") is not None
 
-EXPECTED_TOOLS = {"price_option", "book_greeks", "run_scenarios", "review_order", "journal_tail"}
+EXPECTED_TOOLS = {"price_option", "book_greeks", "run_scenarios", "review_order", "journal_tail", "run_experiment"}
 
 LIMITS = {
     "max_abs_delta": 1000.0,

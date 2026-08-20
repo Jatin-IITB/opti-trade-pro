@@ -64,6 +64,22 @@ Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/r
   summary + every analyst whose source events exist, each section groundedness-scored,
   skipped analysts listed rather than hidden (`test_daily_report.py`, ADR-020). Emitted
   automatically by `optitrade cycle`.
+- **LLM agent adapters** (`optitrade.agents`) — hybrid LLM analysts mirror the
+  deterministic roster: `LLMSurfaceAnalyst`, `LLMRegimeAnalyst`,
+  `LLMPostMortemAnalyst`, each producing deterministic claims with LLM-generated
+  narrative. The `LLMBackend` protocol abstracts the LLM provider (`DspyBackend`
+  wraps dspy, tests use plain mocks); the `AnalystOrchestrator` runs both tiers
+  and captures failures without propagating. Groundedness invariant preserved:
+  100% with mock backends (`test_llm_analyst.py`, `test_orchestrator.py`, ADR-021).
+- **Research loop** (`optitrade.research`) — propose parameter changes → walk-forward
+  evaluates → rank → journal. `GridSearchAgent` (deterministic grid) and
+  `LLMResearchAgent` (structured JSON from LLM) produce `ResearchProposal`s;
+  `ProposalEvaluator` compares each against a cached baseline via walk-forward
+  with deflated Sharpe; `ResearchLoop` orchestrates the cycle. Accepted proposals
+  generate `research_accepted` journal events for governance review — the loop
+  surfaces candidates, never applies them. MCP `run_experiment` tool provides
+  backtest-as-tool for agents (`test_research_agent.py`,
+  `test_research_evaluator.py`, `test_research_loop.py`, ADR-022).
 
 And the connective tissue the engines report through:
 
@@ -85,6 +101,8 @@ optitrade demo         # end-to-end synthetic run: chain → surface → Greeks 
                        # debate → risk review → hedging sim, journaled to ./runtime_data
 optitrade cycle        # paper desk over a synthetic market: strategy → debate →
                        # fail-closed risk → paper fills → WW hedging → kill switch
+optitrade research     # research loop: grid-search proposals → walk-forward →
+                       # ranked results with Sharpe and deflated Sharpe
 
 pytest -q              # full suite (deterministic, seeded)
 pytest -q -m benchmark # latency targets (run locally; excluded on shared CI runners)
@@ -129,10 +147,11 @@ Start with [docs/architecture.md](docs/architecture.md), then the ADR index in
 ```
 src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker deps)
   core/ pricing/ vol/ greeks/ hedging/ risk/ journal/ governance/
-  attribution/ backtest/ data/ explain/ audit/ strategy/ desk/ mcp_server.py
+  attribution/ backtest/ data/ explain/ audit/ strategy/ desk/
+  agents/ research/ mcp_server.py
 src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
 tests/unit/quant/         the enforcing tests referenced throughout this README
-docs/adr/                 architecture decision records (ADR-001…015)
+docs/adr/                 architecture decision records (ADR-001…022)
 docs/debates/             expert-debate records behind the contested ADRs
 ```
 
