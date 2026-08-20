@@ -1,111 +1,113 @@
-# OptiTrade Pro — Derivatives Pricing & Risk Engine
+# OptiTrade Pro
 
-A production-grade options analytics stack in two layers:
+[![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
+![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![Tests 557](https://img.shields.io/badge/tests-557%20passed-brightgreen)
+![License MIT](https://img.shields.io/badge/license-MIT-green)
 
-- **`optitrade`** — a standalone quant core (numpy/scipy only, strictly typed, event-journaled):
-  vol surfaces, Greeks, hedging, and pre-trade risk.
-- **`options_trading`** — a FastAPI platform (Upstox OAuth, market data, dashboards) that
-  consumes the core through thin adapters.
+**A production-grade autonomous volatility desk** — from option pricing through
+risk-controlled paper trading to an LLM-augmented research loop — built as two
+strictly layered packages with 22 architecture decision records, a fail-closed
+risk engine, and 557 deterministic tests enforcing every quantitative claim.
 
-Every quantitative claim below names the test that enforces it (CLAUDE.md rule 8 — docs
-state only test-enforced facts).
+> Every number in this README names the test that checks it (CLAUDE.md rule 8).
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Platform["options_trading — FastAPI + Upstox"]
+        API["Analytics API<br/><small>surface · greeks · scenarios · risk</small>"]
+        CAP["Live Capture<br/><small>Upstox → quote filters → Parquet</small>"]
+        SCHED["Capture Scheduler<br/><small>IST market window</small>"]
+        DASH["Dashboards &amp; Auth"]
+    end
+
+    subgraph Core["optitrade — pure quant core (numpy/scipy, no I/O)"]
+        VOL["Vol Surface<br/><small>spline · SABR · eSSVI joint</small>"]
+        GRK["Greeks Engine<br/><small>analytic · finite-diff · adjoint AD</small>"]
+        HDG["Hedging<br/><small>Whalley-Wilmott · gamma scalp</small>"]
+        RSK["Risk Engine<br/><small>fail-closed, 4 checks</small>"]
+        GOV["Governance<br/><small>debate panel · veto rule</small>"]
+        DESK["Paper Desk<br/><small>daily cycle · kill switch</small>"]
+        BT["Walk-Forward<br/><small>deflated Sharpe · VRP strategy</small>"]
+        AGT["Agent Layer<br/><small>LLM analysts · orchestrator</small>"]
+        RES["Research Loop<br/><small>propose → evaluate → rank</small>"]
+        JRN["Event Journal<br/><small>append-only JSONL</small>"]
+        MCP["MCP Server<br/><small>6 journaling tools</small>"]
+        EXP["P&amp;L Explain<br/><small>PCA factors · attribution</small>"]
+        AUD["Groundedness Audit<br/><small>claim ↔ journal verification</small>"]
+    end
+
+    Platform -->|"imports (never reverse)"| Core
+    API --> VOL & GRK & HDG & RSK
+    CAP --> VOL
+    DESK --> GOV --> RSK
+    DESK --> HDG
+    DESK --> BT
+    AGT --> AUD --> JRN
+    RES --> BT
+    MCP --> JRN
+    EXP --> JRN
+```
+
+**One-way dependency** (ADR-002): the platform imports the core — never the reverse.
+The quant core has zero web framework, broker SDK, or network dependencies.
+
+## Design highlights
+
+These are the engineering decisions that make this project non-trivial:
+
+| Decision | Why it matters | Evidence |
+|---|---|---|
+| **Fail-closed risk engine** | Any exception inside a risk check converts to REJECT — never a pass-through. Property-tested: no limit-breaching order is ever approved. | `test_risk.py` · ADR-008 |
+| **Three independent Greeks methods** | Analytic BS, finite-diff, and a from-scratch tape-based adjoint AD engine agree pairwise across a full parameter sweep — catches model bugs that one method alone would miss. | `test_greeks_cross.py` · ADR-006 |
+| **Deflated Sharpe ratio** | Walk-forward reports OOS Sharpe **and** the Bailey–López de Prado deflated Sharpe with honest trial accounting — prevents overfitting from selection bias. | `test_dsr.py` · ADR-016 |
+| **Groundedness auditing** | Agent claims are trusted only if every number matches the journal event it cites. LLM analysts produce deterministic claims + LLM narrative — the LLM never touches the claim pipeline. | `test_groundedness.py` · ADR-021 |
+| **Event-sourced decisions** | Every hedge, risk verdict, and debate outcome is appended to an append-only JSONL journal with monotonic sequences and correlation IDs. A full run replays as evidence. | `test_journal.py` · ADR-009 |
+| **Governance debate panel** | Trade proposals go through a deterministic expert panel with confidence-weighted consensus and a confident-veto rule (confidence >= 0.9 blocks regardless of score). | `test_governance.py` · ADR-010 |
+| **Research loop with human gate** | Agents propose parameter changes, walk-forward evaluates, results are journaled — but proposals are never auto-applied. Human approval gate prevents automated strategy drift. | `test_research_loop.py` · ADR-022 |
+| **Backtested code = production code** | The `Strategy` protocol is shared by walk-forward and live desk — the code that runs in backtest *is* the code that runs in paper trading. No divergence by construction. | `test_daily_cycle.py` · ADR-018 |
 
 ## The four engines
 
-| Engine | What it does | Verified behaviour |
+| Engine | What it does | Verified by |
 |---|---|---|
-| **Vol surface** | Newton–Raphson/Brent IV stripping; natural cubic-spline smiles in log-moneyness; per-expiry SABR (Hagan 2002, fixed β, seeded multi-start least-squares); calendar interpolation in total variance; Breeden–Litzenberger butterfly + calendar no-arb validation | SABR round-trip RMSE **< 0.3 vol-pt** on noisy synthetic smiles — `tests/unit/quant/test_sabr.py` |
-| **Surface v2 (eSSVI)** | SSVI with power-law φ calibrated **jointly across all expiries** (Gatheral–Jacquier 2014); θ monotone by construction, butterfly conditions as in-fit penalties; Durrleman g(k) ≥ 0 validation; **risk-neutral density gate** (pdf ≥ 0, ∫≈1, mean ≈ forward); SABR reported as benchmark on every fit | Joint round-trip RMSE **0.076 vol-pt** with **0 Durrleman violations** — `test_essvi.py`; density gate — `test_density.py` |
-| **Greeks** | Three independent methods: vectorised analytic BS, model-agnostic central finite differences, and a from-scratch tape-based **adjoint AD** engine (one backward pass → all first-order Greeks); fully broadcast ΔS×Δσ×Δt scenario revaluation | Methods agree pairwise across a parameter sweep — `test_greeks_cross.py`; **539-cell grid × 50 positions < 200 ms** — `test_scenario.py` (benchmark marker) |
-| **Hedging** | Whalley–Wilmott (1997) no-transaction band (stochastic-control optimal under proportional costs); gamma scalping modulates the band by the realized/implied vol ratio (EWMA RV); Taylor P&L attribution | GBM hedging sim: mean P&L ≈ 0 at realized = implied, hedged P&L tracks theoretical theta; long-gamma earns when RV > IV — `test_hedging_sim.py` |
-| **Risk** | Fail-closed pre-trade engine: Greeks caps, margin sufficiency, drawdown **halt**, concentration **resize**; verdict precedence HALT > REJECT > RESIZE > APPROVE; every decision journaled with plain-English, number-bearing reasons | Property-tested: **no limit-breaching order is ever approved**, including when a check itself crashes — `test_risk.py` |
+| **Vol surface** | IV stripping → cubic-spline smiles → per-expiry SABR (Hagan 2002) → calendar interpolation; eSSVI joint calibration (Gatheral–Jacquier 2014) with butterfly penalties and Durrleman g(k) >= 0; risk-neutral density gate | SABR RMSE **< 0.3 vol-pt** (`test_sabr.py`); eSSVI RMSE **0.076 vol-pt**, **0 Durrleman violations** (`test_essvi.py`); density gate (`test_density.py`) |
+| **Greeks** | Vectorised analytic BS, central finite differences, tape-based adjoint AD (one backward pass → all first-order Greeks); broadcast scenario grids | Methods agree pairwise (`test_greeks_cross.py`); **539 cells x 50 positions < 200 ms** (`test_scenario.py`) |
+| **Hedging** | Whalley–Wilmott (1997) no-transaction band; gamma scalping with EWMA RV/IV modulation; Taylor P&L attribution | GBM sim: hedged P&L tracks theta; long-gamma earns when RV > IV (`test_hedging_sim.py`) |
+| **Risk** | Fail-closed pre-trade: Greeks caps, margin sufficiency, drawdown halt, concentration resize; verdict precedence HALT > REJECT > RESIZE > APPROVE | **No limit-breaching order ever approved** — property tested (`test_risk.py`) |
 
-Plus the flagship layers on top (the [autonomous-volatility-desk roadmap](docs/roadmap.md)):
+## Flagship layers
 
-- **Data spine** (`optitrade.data`) — NSE-reality quote filters (crossed books, stale
-  quotes, wide spreads, zero-bid wings) with per-reason audit stats, and a
-  schema-versioned Parquet snapshot store with lossless round-trips
-  (`test_quote_filters.py`, `test_snapshot_store.py`, ADR-013).
-- **P&L explain** (`optitrade.explain`) — daily decomposition into theta carry, gamma vs
-  realized variance, vega per PCA surface factor (level/term/skew), vanna/volga, and
-  residual; `explained_fraction` is the headline metric; expiry-bucketed exposure reports
-  (`test_pnl_explain.py`, `test_factors.py`, `test_bucket_report.py`, ADR-014).
-- **MCP server** (`optitrade.mcp_server`, extra `[mcp]`) — the engines exposed as agent
-  tools (`price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`);
-  every tool call journaled so agent claims have something to cite (ADR-015).
-- **Groundedness audit** (`optitrade.audit`) — deterministic auditor: an agent claim is
-  trusted only if every number it states matches the journal events it cites
-  (`test_groundedness.py`). No LLM in the money path, ever.
-- **Strategy + backtest** (`optitrade.strategy`, `optitrade.backtest`) — VRP harvesting
-  behind a `Strategy` protocol shared by backtester and live desk (backtested code *is*
-  production decision code); typed Indian cost model (STT/exchange/GST/SEBI/stamp/
-  brokerage, per-fill breakdowns); walk-forward evaluation reporting out-of-sample **and
-  deflated** Sharpe (Bailey–López de Prado) with honest trial accounting. Economic ground
-  truths enforced: positive synthetic VRP ⇒ profit, zero VRP ⇒ zero trades, a tight vega
-  cap blocks 100% of entries (`test_walk_forward.py`, `test_dsr.py`, `test_costs.py`,
-  ADR-016/017).
-- **Paper desk** (`optitrade.desk`) — `run_daily_cycle`: mark → strategy → debate →
-  fail-closed risk → paper fill → WW hedge → journal, with a file-based **kill switch**
-  a drawdown HALT engages automatically; self-auditing analyst agents (Surface Auditor,
-  Post-Mortem) that must ground at 100% against the journal before reporting
-  (`test_daily_cycle.py`, `test_analysts.py`, ADR-018).
-- **Live capture** (`options_trading` → `/api/v1/capture/*`) — Upstox chains through the
-  quote filters into the Parquet store; clean history accumulates per run
-  (`tests/unit/test_capture_service.py`). The **scheduler**
-  (`/capture/schedule/start|stop|status`) runs it unattended inside the IST market window
-  — injected-clock tested, one bad capture never kills the loop, operator-started by
-  design (`test_capture_scheduler.py`, ADR-019).
-- **Real-history replay + drift** — `StoreReplay` turns captured Parquet into the same
-  `MarketDay`s the synthetic replay emits, so the walk-forward harness runs on real data
-  unchanged; `backtest_vs_desk_drift` runs backtester and paper desk over identical days
-  with the identical strategy and reports the execution-model gap in bps
-  (`test_store_replay.py`, `test_reconcile.py`, ADR-019).
-- **Daily report** (`optitrade.desk.report`) — one markdown artifact per run: desk
-  summary + every analyst whose source events exist, each section groundedness-scored,
-  skipped analysts listed rather than hidden (`test_daily_report.py`, ADR-020). Emitted
-  automatically by `optitrade cycle`.
-- **LLM agent adapters** (`optitrade.agents`) — hybrid LLM analysts mirror the
-  deterministic roster: `LLMSurfaceAnalyst`, `LLMRegimeAnalyst`,
-  `LLMPostMortemAnalyst`, each producing deterministic claims with LLM-generated
-  narrative. The `LLMBackend` protocol abstracts the LLM provider (`DspyBackend`
-  wraps dspy, tests use plain mocks); the `AnalystOrchestrator` runs both tiers
-  and captures failures without propagating. Groundedness invariant preserved:
-  100% with mock backends (`test_llm_analyst.py`, `test_orchestrator.py`, ADR-021).
-- **Research loop** (`optitrade.research`) — propose parameter changes → walk-forward
-  evaluates → rank → journal. `GridSearchAgent` (deterministic grid) and
-  `LLMResearchAgent` (structured JSON from LLM) produce `ResearchProposal`s;
-  `ProposalEvaluator` compares each against a cached baseline via walk-forward
-  with deflated Sharpe; `ResearchLoop` orchestrates the cycle. Accepted proposals
-  generate `research_accepted` journal events for governance review — the loop
-  surfaces candidates, never applies them. MCP `run_experiment` tool provides
-  backtest-as-tool for agents (`test_research_agent.py`,
-  `test_research_evaluator.py`, `test_research_loop.py`, ADR-022).
+Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 
-And the connective tissue the engines report through:
-
-- **Event journal** (`optitrade.journal`) — append-only JSONL, monotonic sequences,
-  correlation IDs; a run replays as evidence (`test_journal.py`).
-- **Governance** (`optitrade.governance`) — every trade proposal is debated by a
-  deterministic expert panel (risk officer / strategy / execution) with confidence-weighted
-  consensus and a confident-veto rule; dissents preserved in the journaled decision record
-  (`test_governance.py`). LLM experts are an optional extra (`pip install ".[agentic]"`).
-- **Attribution** (`optitrade.attribution`) — exact Shapley values for fair P&L credit
-  across strategies (`test_shapley.py`).
+| Layer | Package | What it does | Tests |
+|---|---|---|---|
+| Data spine | `optitrade.data` | NSE-reality quote filters (crossed books, stale quotes, wide spreads) + Parquet snapshot store | `test_quote_filters.py`, `test_snapshot_store.py` |
+| P&L explain | `optitrade.explain` | Daily decomposition: theta, gamma-vs-RV, vega per PCA factor, vanna/volga, residual | `test_pnl_explain.py`, `test_factors.py` |
+| VRP strategy | `optitrade.strategy` | Variance risk premium harvesting with Indian cost model (STT/exchange/GST/SEBI/stamp/brokerage) | `test_vrp_strategy.py`, `test_costs.py` |
+| Walk-forward | `optitrade.backtest` | Combinatorial purged cross-validation, deflated Sharpe, synthetic + real-history replay | `test_walk_forward.py`, `test_dsr.py` |
+| Paper desk | `optitrade.desk` | Daily cycle: mark → strategy → debate → risk → fill → hedge → journal; kill switch on drawdown halt | `test_daily_cycle.py`, `test_kill_switch.py` |
+| Live capture | `options_trading` | Upstox chains → quote filters → Parquet; unattended scheduler inside IST window | `test_capture_service.py`, `test_capture_scheduler.py` |
+| Drift metric | `optitrade.desk` | Backtest-vs-desk reconciliation on identical days — measures the execution-model gap in bps | `test_reconcile.py` |
+| Daily report | `optitrade.desk` | Markdown artifact: desk summary + analyst sections, each groundedness-scored | `test_daily_report.py` |
+| LLM analysts | `optitrade.agents` | Hybrid: deterministic claims + LLM narrative; orchestrator runs both tiers, fail-open capture | `test_llm_analyst.py`, `test_orchestrator.py` |
+| Research loop | `optitrade.research` | GridSearch + LLM agents propose → walk-forward evaluates → rank → journal; human approval gate | `test_research_loop.py`, `test_research_evaluator.py` |
+| MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py` |
+| Groundedness | `optitrade.audit` | Deterministic auditor: claim numbers must match journal citations | `test_groundedness.py` |
 
 ## Quick start
 
 ```bash
 uv venv --python 3.12 && uv pip install -e ".[dev]"   # or: pip install -e ".[dev]"
 
-optitrade demo         # end-to-end synthetic run: chain → surface → Greeks →
-                       # debate → risk review → hedging sim, journaled to ./runtime_data
-optitrade cycle        # paper desk over a synthetic market: strategy → debate →
-                       # fail-closed risk → paper fills → WW hedging → kill switch
-optitrade research     # research loop: grid-search proposals → walk-forward →
-                       # ranked results with Sharpe and deflated Sharpe
+optitrade demo         # end-to-end: chain → surface → Greeks → debate → risk → hedging sim
+optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
+optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # full suite (deterministic, seeded)
-pytest -q -m benchmark # latency targets (run locally; excluded on shared CI runners)
+pytest -q              # 557 tests, deterministic (seeded RNGs, no network)
+pytest -q -m benchmark # latency targets (run locally)
 ```
 
 Run the platform (needs Upstox credentials in `.env`, see `.env.example`):
@@ -115,22 +117,17 @@ uvicorn options_trading.main:app --reload --port 8000
 # docs at http://localhost:8000/docs — quant endpoints under /api/v1/analytics/*
 ```
 
-Docker:
+## Analytics API
 
-```bash
-docker build -t optitrade-pro . && docker run -p 8000:8000 --env-file .env optitrade-pro
-```
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /api/v1/analytics/surface` | Option chain | Spline + SABR surface, fit RMSE, arb violations |
+| `POST /api/v1/analytics/greeks` | Book positions | Aggregate + per-position Greeks |
+| `POST /api/v1/analytics/scenarios` | Book + grid params | DS x Dvol x Dt P&L cube, worst/best cells |
+| `POST /api/v1/analytics/hedge/decide` | Position + market | Whalley–Wilmott band decision with rationale |
+| `POST /api/v1/analytics/risk/review` | Order + context | Fail-closed verdict with per-check reasons |
 
-## Analytics API (platform → core adapters)
-
-- `POST /api/v1/analytics/surface` — chain in, spline+SABR surface out, with per-expiry SABR
-  params, fit RMSE, and any no-arbitrage violations
-- `POST /api/v1/analytics/greeks` — book in, aggregate + per-position Greeks out
-- `POST /api/v1/analytics/scenarios` — ΔS×Δσ×Δt P&L cube with worst/best cells and timing
-- `POST /api/v1/analytics/hedge/decide` — Whalley–Wilmott band decision with rationale
-- `POST /api/v1/analytics/risk/review` — fail-closed pre-trade verdict with per-check reasons
-
-## How decisions are made (in the code and about the code)
+## How decisions are made
 
 The same debate → consensus → recorded-decision mechanism runs at two timescales:
 
@@ -151,7 +148,7 @@ src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker de
   agents/ research/ mcp_server.py
 src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
 tests/unit/quant/         the enforcing tests referenced throughout this README
-docs/adr/                 architecture decision records (ADR-001…022)
+docs/adr/                 architecture decision records (ADR-001...022)
 docs/debates/             expert-debate records behind the contested ADRs
 ```
 

@@ -2,51 +2,47 @@
 
 Two packages, one-way dependency (ADR-002):
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  options_trading  (platform layer)                             │
-│  FastAPI app · Upstox OAuth/market data · dashboards · WS      │
-│  api/routes/analytics.py  ──  thin adapter over the core       │
-└───────────────────────────┬────────────────────────────────────┘
-                            │ imports (never the reverse)
-┌───────────────────────────▼────────────────────────────────────┐
-│  optitrade  (quant core — numpy/scipy, strict types, no I/O)   │
-│                                                                │
-│  core        types (Greeks, Order, Portfolio…) · errors        │
-│  pricing     BS-Merton · analytic Greeks · implied vol         │
-│  vol         spline smiles · SABR (Hagan) · eSSVI joint fit    │
-│              · Durrleman/calendar/butterfly · RND gate         │
-│  greeks      finite-diff · adjoint AD tape · scenario grids    │
-│  hedging     WW band · gamma scalper · P&L attribution         │
-│  risk        fail-closed pre-trade checks (ADR-008)            │
-│  governance  expert debate panel (ADR-010)                     │
-│  journal     append-only JSONL event log (ADR-009)             │
-│  attribution Shapley P&L credit                                │
-│  backtest    GBM paths · hedging simulation                    │
-│  data        quote filters · Parquet snapshot store (ADR-013)  │
-│  explain     PCA surface factors · daily P&L explain (ADR-014) │
-│  audit       groundedness auditor for agent claims (ADR-015)   │
-│  mcp_server  engines as journaling MCP tools (ADR-015)         │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Platform["options_trading — FastAPI + Upstox"]
+        API["Analytics API"]
+        CAP["Live Capture"]
+        SCHED["Scheduler"]
+        DASH["Dashboards"]
+    end
+
+    subgraph Core["optitrade — pure quant core (numpy/scipy, no I/O)"]
+        direction TB
+        VOL["Vol Surface<br/><small>spline · SABR · eSSVI</small>"]
+        GRK["Greeks<br/><small>analytic · FD · adjoint AD</small>"]
+        HDG["Hedging<br/><small>WW band · gamma scalp</small>"]
+        RSK["Risk Engine<br/><small>fail-closed</small>"]
+        GOV["Governance<br/><small>debate panel</small>"]
+        JRN["Event Journal<br/><small>append-only JSONL</small>"]
+        DESK["Paper Desk<br/><small>daily cycle</small>"]
+        BT["Walk-Forward<br/><small>deflated Sharpe</small>"]
+        AGT["Agents<br/><small>LLM + deterministic</small>"]
+        RES["Research Loop<br/><small>propose → evaluate</small>"]
+        EXP["P&L Explain<br/><small>PCA factors</small>"]
+        AUD["Groundedness<br/><small>claim audit</small>"]
+        MCP["MCP Server<br/><small>6 tools</small>"]
+    end
+
+    Platform -->|"imports (never reverse)"| Core
 ```
 
 ## Decision flow for a trade
 
-```
-TradeProposal
-   │
-   ▼
-DebatePanel.deliberate()          RiskOfficer / StrategyExpert / ExecutionExpert
-   │  DecisionRecord ──────────►  journal: debate_decision
-   ▼ (approved)
-RiskEngine.review(order, ctx)     GreeksLimit / Margin / Drawdown / Concentration
-   │  RiskDecision ────────────►  journal: risk_decision
-   ▼ (approved / resized)
-execution (platform layer)
-   │
-   ▼
-DeltaHedger.decide()  per rebalance tick
-      HedgeDecision ───────────►  journal: hedge_decision
+```mermaid
+graph LR
+    TP["Trade<br/>Proposal"] --> DP["Debate Panel<br/><small>3 experts</small>"]
+    DP -->|"approved"| RE["Risk Engine<br/><small>4 checks</small>"]
+    RE -->|"approved/resized"| EX["Execution"]
+    EX --> DH["Delta Hedger<br/><small>per tick</small>"]
+
+    DP -.->|"journal"| J["Event Journal"]
+    RE -.->|"journal"| J
+    DH -.->|"journal"| J
 ```
 
 Every arrow into the journal carries a correlation ID, so one order's debate → risk review →
@@ -56,20 +52,24 @@ hedge chain replays as a unit (`EventLog.events_by_correlation`).
 
 | Engine | Headline behaviour | Enforced by |
 |---|---|---|
-| Vol surface | SABR round-trip RMSE < 0.3 vol-pt | `tests/unit/quant/test_sabr.py` |
-| Vol surface | static no-arb detection (butterfly/calendar) | `tests/unit/quant/test_arbitrage.py` |
-| Greeks | analytic ≡ finite-diff ≡ adjoint AD | `tests/unit/quant/test_greeks_cross.py` |
-| Greeks | ≥500-cell ΔS×Δσ×Δt grid, 50 positions, <200 ms | `tests/unit/quant/test_scenario.py` |
-| Hedging | hedged P&L tracks theoretical theta in GBM sim | `tests/unit/quant/test_hedging_sim.py` |
-| Risk | 100% of out-of-bound orders blocked (property test) | `tests/unit/quant/test_risk.py` |
-| Journal | replay + sequence recovery | `tests/unit/quant/test_journal.py` |
-| Governance | confident-veto consensus | `tests/unit/quant/test_governance.py` |
-| Surface v2 | eSSVI joint fit, 0 Durrleman violations, RMSE < 0.3 vol-pt | `tests/unit/quant/test_essvi.py` |
-| Surface v2 | risk-neutral density gate (pdf ≥ 0, ∫≈1, mean ≈ F) | `tests/unit/quant/test_density.py` |
-| Data spine | filter semantics + lossless Parquet round-trip | `test_quote_filters.py`, `test_snapshot_store.py` |
-| P&L explain | exact Taylor reconciliation; factor vega additivity | `test_pnl_explain.py`, `test_factors.py` |
-| Audit | fabricated numeric claims rejected with named reasons | `tests/unit/quant/test_groundedness.py` |
-| MCP | tools journal every call; optional-dep import hygiene | `tests/unit/quant/test_mcp_server.py` |
+| Vol surface | SABR round-trip RMSE < 0.3 vol-pt | `test_sabr.py` |
+| Vol surface v2 | eSSVI joint fit, 0 Durrleman violations, RMSE 0.076 vol-pt | `test_essvi.py` |
+| Vol surface v2 | Risk-neutral density gate (pdf >= 0, integral ~= 1, mean ~= F) | `test_density.py` |
+| Greeks | analytic = finite-diff = adjoint AD | `test_greeks_cross.py` |
+| Greeks | 539-cell grid, 50 positions, < 200 ms | `test_scenario.py` |
+| Hedging | Hedged P&L tracks theoretical theta in GBM sim | `test_hedging_sim.py` |
+| Risk | 100% of out-of-bound orders blocked (property test) | `test_risk.py` |
+| Journal | Replay + sequence recovery | `test_journal.py` |
+| Governance | Confident-veto consensus | `test_governance.py` |
+| Data spine | Filter semantics + lossless Parquet round-trip | `test_quote_filters.py`, `test_snapshot_store.py` |
+| P&L explain | Exact Taylor reconciliation; factor vega additivity | `test_pnl_explain.py`, `test_factors.py` |
+| Audit | Fabricated numeric claims rejected with named reasons | `test_groundedness.py` |
+| MCP | Tools journal every call; optional-dep import hygiene | `test_mcp_server.py` |
+| Walk-forward | Deflated Sharpe with honest trial accounting | `test_dsr.py`, `test_walk_forward.py` |
+| Paper desk | Full daily cycle: mark → strategy → debate → risk → fill → hedge | `test_daily_cycle.py` |
+| Drift | Backtest-vs-desk reconciliation on identical days | `test_reconcile.py` |
+| LLM analysts | Hybrid: deterministic claims + LLM narrative, 100% grounded | `test_llm_analyst.py` |
+| Research loop | Propose → evaluate → rank → journal; human approval gate | `test_research_loop.py` |
 
 ## Layering rules
 
