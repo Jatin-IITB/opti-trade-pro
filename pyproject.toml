@@ -56,6 +56,8 @@ dev = [
 agentic = ["dspy>=2.5.0"]
 # Optional MCP server exposing the engines as agent tools (ADR-015).
 mcp = ["mcp>=1.2.0"]
+# Optional JAX-based automatic differentiation for exact higher-order Greeks (ADR-023).
+jax = ["jax[cpu]>=0.4.20"]
 
 [project.scripts]
 optitrade = "optitrade.cli:main"
@@ -127,7 +129,7 @@ module = "options_trading.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["keyring.*", "scipy.*", "pandas.*", "psutil.*"]
+module = ["keyring.*", "scipy.*", "pandas.*", "psutil.*", "jax.*", "jaxlib.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

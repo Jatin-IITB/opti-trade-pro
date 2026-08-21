@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
 ![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![Tests 557](https://img.shields.io/badge/tests-557%20passed-brightgreen)
+![Tests 571](https://img.shields.io/badge/tests-571%20passed-brightgreen)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 **A production-grade autonomous volatility desk** — from option pricing through
 risk-controlled paper trading to an LLM-augmented research loop — built as two
-strictly layered packages with 22 architecture decision records, a fail-closed
-risk engine, and 557 deterministic tests enforcing every quantitative claim.
+strictly layered packages with 23 architecture decision records, a fail-closed
+risk engine, and 571 deterministic tests enforcing every quantitative claim.
 
 > Every number in this README names the test that checks it (CLAUDE.md rule 8).
 
@@ -25,7 +25,7 @@ graph TB
 
     subgraph Core["optitrade — pure quant core (numpy/scipy, no I/O)"]
         VOL["Vol Surface<br/><small>spline · SABR · eSSVI joint</small>"]
-        GRK["Greeks Engine<br/><small>analytic · finite-diff · adjoint AD</small>"]
+        GRK["Greeks Engine<br/><small>analytic · FD · adjoint AD · JAX AD</small>"]
         HDG["Hedging<br/><small>Whalley-Wilmott · gamma scalp</small>"]
         RSK["Risk Engine<br/><small>fail-closed, 4 checks</small>"]
         GOV["Governance<br/><small>debate panel · veto rule</small>"]
@@ -61,7 +61,7 @@ These are the engineering decisions that make this project non-trivial:
 | Decision | Why it matters | Evidence |
 |---|---|---|
 | **Fail-closed risk engine** | Any exception inside a risk check converts to REJECT — never a pass-through. Property-tested: no limit-breaching order is ever approved. | `test_risk.py` · ADR-008 |
-| **Three independent Greeks methods** | Analytic BS, finite-diff, and a from-scratch tape-based adjoint AD engine agree pairwise across a full parameter sweep — catches model bugs that one method alone would miss. | `test_greeks_cross.py` · ADR-006 |
+| **Four independent Greeks methods** | Analytic BS, finite-diff, from-scratch tape-based adjoint AD, and JAX automatic differentiation all agree pairwise across a full parameter sweep — catches model bugs that one method alone would miss. JAX adds exact higher-order Greeks (charm, speed, color, ultima) via nested `jax.grad`. | `test_greeks_cross.py` · ADR-006 · ADR-023 |
 | **Deflated Sharpe ratio** | Walk-forward reports OOS Sharpe **and** the Bailey–López de Prado deflated Sharpe with honest trial accounting — prevents overfitting from selection bias. | `test_dsr.py` · ADR-016 |
 | **Groundedness auditing** | Agent claims are trusted only if every number matches the journal event it cites. LLM analysts produce deterministic claims + LLM narrative — the LLM never touches the claim pipeline. | `test_groundedness.py` · ADR-021 |
 | **Event-sourced decisions** | Every hedge, risk verdict, and debate outcome is appended to an append-only JSONL journal with monotonic sequences and correlation IDs. A full run replays as evidence. | `test_journal.py` · ADR-009 |
@@ -74,7 +74,7 @@ These are the engineering decisions that make this project non-trivial:
 | Engine | What it does | Verified by |
 |---|---|---|
 | **Vol surface** | IV stripping → cubic-spline smiles → per-expiry SABR (Hagan 2002) → calendar interpolation; eSSVI joint calibration (Gatheral–Jacquier 2014) with butterfly penalties and Durrleman g(k) >= 0; risk-neutral density gate | SABR RMSE **< 0.3 vol-pt** (`test_sabr.py`); eSSVI RMSE **0.076 vol-pt**, **0 Durrleman violations** (`test_essvi.py`); density gate (`test_density.py`) |
-| **Greeks** | Vectorised analytic BS, central finite differences, tape-based adjoint AD (one backward pass → all first-order Greeks); broadcast scenario grids | Methods agree pairwise (`test_greeks_cross.py`); **539 cells x 50 positions < 200 ms** (`test_scenario.py`) |
+| **Greeks** | Four methods: vectorised analytic BS, central finite differences, from-scratch tape-based adjoint AD, and JAX AD with exact higher-order Greeks (charm/speed/color/ultima) via nested `jax.grad`; `jax.vmap` book-level vectorisation; broadcast scenario grids | Methods agree pairwise (`test_greeks_cross.py`, `test_jax_ad.py`); **539 cells x 50 positions < 200 ms** (`test_scenario.py`) |
 | **Hedging** | Whalley–Wilmott (1997) no-transaction band; gamma scalping with EWMA RV/IV modulation; Taylor P&L attribution | GBM sim: hedged P&L tracks theta; long-gamma earns when RV > IV (`test_hedging_sim.py`) |
 | **Risk** | Fail-closed pre-trade: Greeks caps, margin sufficiency, drawdown halt, concentration resize; verdict precedence HALT > REJECT > RESIZE > APPROVE | **No limit-breaching order ever approved** — property tested (`test_risk.py`) |
 
@@ -106,7 +106,7 @@ optitrade demo         # end-to-end: chain → surface → Greeks → debate →
 optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
 optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # 557 tests, deterministic (seeded RNGs, no network)
+pytest -q              # 571 tests, deterministic (seeded RNGs, no network)
 pytest -q -m benchmark # latency targets (run locally)
 ```
 
@@ -148,7 +148,7 @@ src/optitrade/            quant core (numpy/scipy, mypy-strict, no web/broker de
   agents/ research/ mcp_server.py
 src/options_trading/      FastAPI platform: auth, market data, dashboards, analytics routes
 tests/unit/quant/         the enforcing tests referenced throughout this README
-docs/adr/                 architecture decision records (ADR-001...022)
+docs/adr/                 architecture decision records (ADR-001...023)
 docs/debates/             expert-debate records behind the contested ADRs
 ```
 

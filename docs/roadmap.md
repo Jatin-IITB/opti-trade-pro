@@ -12,13 +12,13 @@ and propose only.**
 - Hedging: Whalley–Wilmott bands + RV/IV gamma scalping + GBM sim (ADR-007)
 - Risk: fail-closed pre-trade engine (ADR-008); journal (ADR-009); debate panel (ADR-010)
 
-## Phase status (2026-08-20)
+## Phase status (2026-08-22)
 
 | Phase | State |
 |---|---|
 | 0 Data pipeline | **Complete** — filters + Parquet store + capture API + unattended IST-window scheduler (ADR-019); accumulate real days by starting `/capture/schedule/start` |
 | 1 Joint surface | **Built** — eSSVI joint fit, Durrleman + RND gates, SABR benchmark (ADR-012) |
-| 2 AAD + P&L explain | **Partial** — P&L explain + PCA factors + bucket reports built; JAX AAD revisit trigger still per ADR-006 |
+| 2 AAD + P&L explain | **Complete** — P&L explain + PCA factors + bucket reports; JAX AAD with exact higher-order Greeks and `vmap` book vectorisation (ADR-023) |
 | 3 Strategy + backtest | **Built** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); `StoreReplay` runs it on real history as it accumulates |
 | 4 Paper loop | **Built** — daily cycle, kill switch, daily report, backtest-vs-desk drift metric (ADR-018/019/020); remaining: wire cycle to live captures on a schedule, drive drift toward zero |
 | 5 Agent layer | **Complete** — MCP server, groundedness auditor, all four deterministic analysts, LLM adapters over the same rails (`LLMBackend` protocol, `DspyBackend`, `AnalystOrchestrator`), MCP `run_experiment` tool (ADR-021) |
@@ -31,8 +31,9 @@ and propose only.**
 1. **Joint surface calibration** — eSSVI across expiries with butterfly/calendar
    constraints imposed at fit time (upgrade over per-expiry SABR, which stays as the
    benchmark); Breeden–Litzenberger risk-neutral-density sanity checks.
-2. **AAD at scale** — revisit ADR-006's trigger: JAX-based AAD for vanna/volga/charm and
-   surface-factor sensitivities; daily P&L explain (theta / gamma-vs-RV / vega-vs-surface
+2. **AAD at scale** — ADR-006's revisit trigger resolved (ADR-023): `jax.grad` nesting
+   gives exact all-order Greeks (charm/veta/speed/color/ultima/zomma); `jax.vmap` fuses
+   the book into one XLA kernel; daily P&L explain (theta / gamma-vs-RV / vega-vs-surface
    factors / residual) on top of `hedging.pnl`.
 3. **Strategy layer** — variance-risk-premium harvesting (IV–RV gate with term/skew regime
    filters), walk-forward backtests with real Indian cost model (charges), deflated Sharpe

@@ -1,4 +1,4 @@
-"""Cross-validation: analytic vs finite-difference vs adjoint Greeks.
+"""Cross-validation: analytic vs finite-difference vs adjoint vs JAX Greeks.
 
 Sweeps moneyness x expiry x vol for calls and puts and asserts pairwise
 agreement per Greek. Diffs are normalised by 1 + |analytic| so one threshold
@@ -8,6 +8,7 @@ gamma ~ 1e-7); the tabulated maxima appear in every assertion message.
 
 from __future__ import annotations
 
+import importlib.util
 import itertools
 
 import pytest
@@ -15,6 +16,8 @@ import pytest
 from optitrade.core import Greeks, OptionType
 from optitrade.greeks import FDBumps, bs_price_adjoint, fd_greeks
 from optitrade.pricing import bs_greeks_at, bs_price
+
+_HAS_JAX = importlib.util.find_spec("jax") is not None
 
 SPOT = 100.0
 RATE = 0.04
@@ -31,7 +34,8 @@ FD_BUMPS = FDBumps(abs_time=1e-6)
 
 # Normalised tolerance per (method pair, greek). Analytic-vs-adjoint is tape
 # exact at first order; FD carries O(h^2) truncation (O(h) for theta); the
-# FD-vs-adjoint bound is the sum of the two one-sided bounds.
+# FD-vs-adjoint bound is the sum of the two one-sided bounds. JAX gives exact
+# derivatives at all orders, so analytic-vs-jax has the tightest bounds.
 TOLERANCES: dict[tuple[str, str], dict[str, float]] = {
     ("analytic", "fd"): {
         "delta": 1e-5,
@@ -62,6 +66,40 @@ TOLERANCES: dict[tuple[str, str], dict[str, float]] = {
     },
 }
 
+# JAX tolerances — added conditionally when JAX is available.
+_JAX_TOLERANCES: dict[tuple[str, str], dict[str, float]] = {
+    ("analytic", "jax"): {
+        "delta": 1e-8,
+        "vega": 1e-8,
+        "rho": 1e-8,
+        "theta": 1e-8,
+        "gamma": 1e-6,
+        "vanna": 1e-6,
+        "volga": 1e-6,
+    },
+    ("jax", "adjoint"): {
+        "delta": 1e-8,
+        "vega": 1e-8,
+        "rho": 1e-8,
+        "theta": 1e-8,
+        "gamma": 1e-5,
+        "vanna": 1e-5,
+        "volga": 1e-5,
+    },
+    ("jax", "fd"): {
+        "delta": 2e-5,
+        "vega": 2e-5,
+        "rho": 2e-5,
+        "gamma": 2e-5,
+        "theta": 2e-4,
+        "vanna": 2e-3,
+        "volga": 2e-3,
+    },
+}
+
+if _HAS_JAX:
+    TOLERANCES.update(_JAX_TOLERANCES)
+
 
 def _greeks_by_method(
     strike: float, expiry: float, vol: float, option_type: OptionType
@@ -70,11 +108,19 @@ def _greeks_by_method(
         return float(bs_price(s, strike, t, r, v, option_type, DIVIDEND_YIELD))
 
     _, adjoint = bs_price_adjoint(SPOT, strike, expiry, RATE, vol, option_type, DIVIDEND_YIELD)
-    return {
+    methods: dict[str, Greeks] = {
         "analytic": bs_greeks_at(SPOT, strike, expiry, RATE, vol, option_type, DIVIDEND_YIELD),
         "fd": fd_greeks(price_fn, SPOT, vol, RATE, expiry, bumps=FD_BUMPS),
         "adjoint": adjoint,
     }
+
+    if _HAS_JAX:
+        from optitrade.greeks.jax_ad import bs_price_jax
+
+        _, jax_greeks = bs_price_jax(SPOT, strike, expiry, RATE, vol, option_type, DIVIDEND_YIELD)
+        methods["jax"] = jax_greeks
+
+    return methods
 
 
 def _max_normalised_diffs() -> dict[tuple[tuple[str, str], str], float]:
@@ -85,6 +131,8 @@ def _max_normalised_diffs() -> dict[tuple[tuple[str, str], str], float]:
     for strike, expiry, vol, option_type in sweep:
         by_method = _greeks_by_method(strike, expiry, vol, option_type)
         for pair in TOLERANCES:
+            if pair[0] not in by_method or pair[1] not in by_method:
+                continue
             a, b = by_method[pair[0]], by_method[pair[1]]
             ref = by_method["analytic"]
             for greek in GREEK_NAMES:
@@ -106,7 +154,7 @@ def _table(max_diff: dict[tuple[tuple[str, str], str], float]) -> str:
 
 
 @pytest.mark.unit
-def test_three_methods_agree_pairwise_across_sweep() -> None:
+def test_methods_agree_pairwise_across_sweep() -> None:
     max_diff = _max_normalised_diffs()
     table = _table(max_diff)
     for pair, tols in TOLERANCES.items():

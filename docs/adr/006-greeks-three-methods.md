@@ -1,7 +1,7 @@
 # ADR-006: Greeks — analytic, finite-difference, and from-scratch adjoint AD, cross-validated
 
 ## Status
-Accepted
+Accepted — extended by ADR-023 (JAX AAD as a fourth cross-validated method)
 
 ## Context
 One Greeks implementation cannot check itself. The report commits to finite-difference plus
@@ -32,3 +32,8 @@ across the ΔS × Δσ × Δt cube — no Python loop over scenarios. Latency ta
 ### Risks
 - Scalar tape is slow for large books — acceptable because the vectorised analytic path
   serves the hot loop; AD exists for exactness and model-agnostic validation.
+
+## Revision: ADR-023 (2026-08-22)
+JAX automatic differentiation added as a fourth method. The revisit trigger noted above
+has been resolved: `jax.grad` nesting gives exact second- and third-order Greeks, and
+`jax.vmap` provides book-level vectorisation. See ADR-023 for details.
