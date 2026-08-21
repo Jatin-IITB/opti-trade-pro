@@ -14,7 +14,7 @@ graph TB
     subgraph Core["optitrade — pure quant core (numpy/scipy, no I/O)"]
         direction TB
         VOL["Vol Surface<br/><small>spline · SABR · eSSVI</small>"]
-        GRK["Greeks<br/><small>analytic · FD · adjoint AD</small>"]
+        GRK["Greeks<br/><small>analytic · FD · adjoint AD · JAX AD</small>"]
         HDG["Hedging<br/><small>WW band · gamma scalp</small>"]
         RSK["Risk Engine<br/><small>fail-closed</small>"]
         GOV["Governance<br/><small>debate panel</small>"]
@@ -55,7 +55,7 @@ hedge chain replays as a unit (`EventLog.events_by_correlation`).
 | Vol surface | SABR round-trip RMSE < 0.3 vol-pt | `test_sabr.py` |
 | Vol surface v2 | eSSVI joint fit, 0 Durrleman violations, RMSE 0.076 vol-pt | `test_essvi.py` |
 | Vol surface v2 | Risk-neutral density gate (pdf >= 0, integral ~= 1, mean ~= F) | `test_density.py` |
-| Greeks | analytic = finite-diff = adjoint AD | `test_greeks_cross.py` |
+| Greeks | analytic = finite-diff = adjoint AD = JAX AD | `test_greeks_cross.py` |
 | Greeks | 539-cell grid, 50 positions, < 200 ms | `test_scenario.py` |
 | Hedging | Hedged P&L tracks theoretical theta in GBM sim | `test_hedging_sim.py` |
 | Risk | 100% of out-of-bound orders blocked (property test) | `test_risk.py` |

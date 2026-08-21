@@ -1,10 +1,11 @@
-"""Greeks engines: finite-difference, adjoint AD, and scenario revaluation.
+"""Greeks engines: finite-difference, adjoint AD, JAX AD, and scenario revaluation.
 
-Three independent routes to sensitivities, cross-validated against the
+Four independent routes to sensitivities, cross-validated against the
 analytic Black-Scholes Greeks in :mod:`optitrade.pricing`:
 
 - :func:`fd_greeks` — model-agnostic bump-and-reprice,
 - :func:`bs_price_adjoint` — tape-based reverse-mode AD,
+- :func:`bs_price_jax` — JAX automatic differentiation (optional ``[jax]`` extra),
 - :func:`run_scenario_grid` — full-revaluation spot x vol x time PnL cube.
 """
 
