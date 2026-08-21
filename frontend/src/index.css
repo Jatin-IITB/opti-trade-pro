@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+body {
+  margin: 0;
+  background: #0f172a;
+  color: #f1f5f9;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.plotly-graph-div .modebar {
+  top: 4px !important;
+  right: 4px !important;
+}
+
+.js-plotly-plot .plotly .modebar-btn {
+  color: #94a3b8 !important;
+}
