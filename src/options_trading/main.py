@@ -33,7 +33,7 @@ from .utils.cache import AsyncCache
 from .utils.exceptions import OptionsTradinError  # keeping your class name as provided
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 websocket_manager = WebSocketManager()
@@ -124,7 +124,7 @@ def create_app() -> FastAPI:
         )
     app.add_middleware(
         SessionMiddleware,
-        secret_key=secret_key or "dev-secret-key",
+        secret_key=secret_key,
         session_cookie="session",
         max_age=settings.oauth_timeout_seconds,
         same_site="lax",
@@ -133,9 +133,7 @@ def create_app() -> FastAPI:
 
     # Security middleware (production)
     if not settings.debug:
-        app.add_middleware(
-            TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "*.yourdomain.com"]
-        )
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
 
     # CORS: wildcard origins with credentials enabled is a CSRF hazard, so the
     # list is explicit; extend via deployment config, not back to "*".
@@ -145,10 +143,11 @@ def create_app() -> FastAPI:
             "http://localhost:8000",
             "http://127.0.0.1:8000",
             "http://localhost:3000",
+            "http://localhost:5173",
         ],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
     # Static files and templates

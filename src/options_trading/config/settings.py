@@ -87,7 +87,9 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # OAuth & Authentication
     # -------------------------------------------------------------------------
-    secret_key: str = Field(default="changeme", description="JWT secret key")
+    secret_key: str = Field(
+        default="", description="JWT secret key — must be set via SECRET_KEY env var"
+    )
     oauth_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/auth/callback",
         description="OAuth2 redirect URI",

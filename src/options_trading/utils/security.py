@@ -2,7 +2,6 @@
 """Enhanced secure storage utilities for token management."""
 
 import base64
-import hashlib
 import json
 import logging
 from datetime import datetime, timedelta
@@ -51,10 +50,10 @@ class SecureStorage:
                 logger.info("Generated new encryption key for token storage")
 
         except Exception as e:
-            logger.warning(f"Keyring access failed, using derived key: {e}")
-            # Fallback: derive key from system info
-            system_id = f"{self.settings.upstox_api_key}:{self.settings.secret_key}"
-            self._encryption_key = hashlib.sha256(system_id.encode()).digest()[:32]
+            logger.warning(f"Keyring access failed, generating ephemeral key: {e}")
+            import os
+
+            self._encryption_key = os.urandom(32)
 
         return self._encryption_key
 
@@ -65,9 +64,7 @@ class SecureStorage:
             encrypted = fernet.encrypt(data.encode())
             return base64.urlsafe_b64encode(encrypted).decode()
         except Exception as e:
-            logger.error(f"Encryption failed: {e}")
-            # Return base64 encoded data as fallback (not secure but functional)
-            return base64.urlsafe_b64encode(data.encode()).decode()
+            raise RuntimeError(f"Token encryption failed — refusing to store plaintext: {e}") from e
 
     def _decrypt_data(self, encrypted_data: str) -> str:
         """Decrypt sensitive data."""
