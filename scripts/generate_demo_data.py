@@ -154,6 +154,155 @@ def _higher_order_greeks() -> dict:
         }
 
 
+def _essvi_calibration() -> dict:
+    """Synthetic eSSVI fit vs market vols across 3 expiries."""
+    rng = np.random.default_rng(99)
+    expiries = [0.08, 0.25, 0.5]
+    strikes = np.linspace(18500, 21500, 30)
+    result: dict = {"expiries": [], "spot": SPOT}
+    for t in expiries:
+        market_vols = []
+        fitted_vols = []
+        for k in strikes:
+            m = np.log(k / SPOT)
+            base = 0.18 + 0.03 * np.sqrt(max(t, 0.01))
+            skew = -0.12 * m / np.sqrt(max(t, 0.01))
+            smile = 0.8 * m**2
+            market = max(base + skew + smile + rng.normal(0, 0.003), 0.05)
+            fitted = max(base + skew + smile, 0.05)
+            market_vols.append(round(float(market), 6))
+            fitted_vols.append(round(float(fitted), 6))
+        theta = round(float((0.18 + 0.03 * np.sqrt(t)) ** 2 * t), 6)
+        result["expiries"].append({
+            "t": round(t, 4),
+            "strikes": [round(float(k), 1) for k in strikes],
+            "marketVols": market_vols,
+            "fittedVols": fitted_vols,
+            "theta": theta,
+            "rmse": round(float(np.std(np.array(market_vols) - np.array(fitted_vols))), 6),
+        })
+    result["params"] = {"rho": -0.35, "eta": 1.82, "gamma": 0.42}
+    result["durrlemanViolations"] = 0
+    return result
+
+
+def _backtest_equity() -> dict:
+    """Synthetic walk-forward backtest equity curve."""
+    rng = np.random.default_rng(42)
+    n_days = 252
+    initial = 1_000_000.0
+    daily_returns = rng.normal(0.0003, 0.012, n_days)
+    daily_returns[60:65] = rng.normal(-0.015, 0.008, 5)
+    daily_returns[150:158] = rng.normal(-0.010, 0.006, 8)
+    equity = [initial]
+    for r in daily_returns:
+        equity.append(equity[-1] * (1 + r))
+    equity_arr = np.array(equity)
+    peak = np.maximum.accumulate(equity_arr)
+    drawdown = (peak - equity_arr) / peak
+    daily_pnl = np.diff(equity_arr)
+    sharpe = float(np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252))
+    max_dd = float(np.max(drawdown))
+    n_folds = 4
+    fold_size = n_days // n_folds
+    folds = []
+    for i in range(n_folds):
+        s = i * fold_size
+        e = min(s + fold_size, n_days)
+        fold_rets = daily_returns[s:e]
+        folds.append({
+            "fold": i + 1,
+            "trainSharpe": round(float(rng.normal(1.5, 0.3)), 3),
+            "testSharpe": round(float(np.mean(fold_rets) / max(np.std(fold_rets), 1e-10) * np.sqrt(252)), 3),
+            "startDay": s,
+            "endDay": e,
+        })
+    return {
+        "equity": [round(float(e), 2) for e in equity_arr],
+        "dailyPnl": [round(float(p), 2) for p in daily_pnl],
+        "drawdown": [round(float(d), 6) for d in drawdown],
+        "sharpe": round(sharpe, 3),
+        "deflatedSharpe": round(sharpe * 0.72, 3),
+        "maxDrawdown": round(max_dd, 4),
+        "totalCosts": round(float(rng.uniform(15000, 25000)), 2),
+        "nTrades": int(rng.integers(180, 260)),
+        "initialEquity": initial,
+        "nDays": n_days,
+        "folds": folds,
+    }
+
+
+def _vrp_signal() -> dict:
+    """Synthetic VRP (IV - RV) signal over time."""
+    rng = np.random.default_rng(77)
+    n_days = 180
+    base_iv = 0.18
+    base_rv = 0.15
+    iv_series = []
+    rv_series = []
+    spread_series = []
+    regimes = []
+    for i in range(n_days):
+        cycle = np.sin(2 * np.pi * i / 60) * 0.03
+        spike = 0.08 if 70 <= i <= 80 else 0.0
+        iv = base_iv + cycle + spike + rng.normal(0, 0.005)
+        rv = base_rv + cycle * 0.6 + spike * 0.5 + rng.normal(0, 0.004)
+        spread = iv - rv
+        iv_series.append(round(float(iv), 6))
+        rv_series.append(round(float(rv), 6))
+        spread_series.append(round(float(spread), 6))
+        if spread > 0.04:
+            regimes.append("rich")
+        elif spread < -0.01:
+            regimes.append("cheap")
+        else:
+            regimes.append("neutral")
+    return {
+        "iv": iv_series,
+        "rv": rv_series,
+        "spread": spread_series,
+        "regimes": regimes,
+        "nDays": n_days,
+        "meanSpread": round(float(np.mean(spread_series)), 4),
+        "entryThreshold": 0.04,
+        "exitThreshold": -0.01,
+    }
+
+
+def _risk_dashboard() -> dict:
+    """Synthetic risk limits utilization."""
+    rng = np.random.default_rng(55)
+    limits = {"delta": 50.0, "gamma": 0.01, "vega": 100000.0, "drawdown": 0.15}
+    current = {
+        "delta": round(float(rng.uniform(10, 40)), 2),
+        "gamma": round(float(rng.uniform(0.002, 0.008)), 5),
+        "vega": round(float(rng.uniform(30000, 80000)), 2),
+        "drawdown": round(float(rng.uniform(0.02, 0.08)), 4),
+    }
+    n_days = 60
+    history = []
+    for i in range(n_days):
+        history.append({
+            "day": i,
+            "deltaUtil": round(float(rng.uniform(0.2, 0.85)), 3),
+            "gammaUtil": round(float(rng.uniform(0.15, 0.9)), 3),
+            "vegaUtil": round(float(rng.uniform(0.3, 0.75)), 3),
+            "drawdownUtil": round(float(rng.uniform(0.1, 0.6)), 3),
+        })
+    verdicts = {
+        "APPROVE": int(rng.integers(120, 200)),
+        "RESIZE": int(rng.integers(15, 40)),
+        "REJECT": int(rng.integers(5, 20)),
+        "HALT": int(rng.integers(0, 3)),
+    }
+    return {
+        "limits": limits,
+        "current": current,
+        "utilizationHistory": history,
+        "verdicts": verdicts,
+    }
+
+
 def _option_chain() -> dict:
     strikes = list(range(19000, 21100, 100))
     expiry = 0.08
@@ -188,6 +337,10 @@ def main() -> None:
         "pnlExplain": _pnl_explain(),
         "higherOrderGreeks": _higher_order_greeks(),
         "optionChain": _option_chain(),
+        "essviCalibration": _essvi_calibration(),
+        "backtestEquity": _backtest_equity(),
+        "vrpSignal": _vrp_signal(),
+        "riskDashboard": _risk_dashboard(),
     }
     out = OUT_DIR / "demo.json"
     out.write_text(json.dumps(datasets, indent=2) + "\n")
