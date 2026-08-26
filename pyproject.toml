@@ -123,7 +123,8 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
-# Platform layer predates the typing standard; tightened incrementally (ADR-004).
+# Platform layer: 79 pre-existing errors; ignore_errors stays until incremental
+# cleanup lands.  CI runs mypy on this package (non-blocking) so the count is visible.
 [[tool.mypy.overrides]]
 module = "options_trading.*"
 ignore_errors = true

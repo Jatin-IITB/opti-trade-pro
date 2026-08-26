@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
 ![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![Tests 574](https://img.shields.io/badge/tests-574%20passed-brightgreen)
+![Tests 598](https://img.shields.io/badge/tests-598%20passed-brightgreen)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 **A production-grade autonomous volatility desk** — from option pricing through
