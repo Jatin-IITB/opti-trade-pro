@@ -6,7 +6,7 @@ Modern replacement for the dict-based token handling in the original code.
 
 from datetime import datetime, timedelta
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class TokenData(BaseModel):
@@ -17,8 +17,9 @@ class TokenData(BaseModel):
     expires_in: int = Field(86400, description="Token expiry in seconds")
     token_type: str = Field("Bearer", description="Token type")
 
-    @validator("expires_in")
-    def validate_expires_in(cls, v):
+    @field_validator("expires_in")
+    @classmethod
+    def validate_expires_in(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("expires_in must be positive")
         return v

@@ -7,7 +7,7 @@ Comprehensive data structures for options, Greeks, and volatility analysis.
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class GreeksSnapshot(BaseModel):
@@ -35,8 +35,9 @@ class OptionData(BaseModel):
     greeks: GreeksSnapshot | None = None
     last_updated: datetime = Field(default_factory=datetime.now)
 
-    @validator("option_type")
-    def validate_option_type(cls, v):
+    @field_validator("option_type")
+    @classmethod
+    def validate_option_type(cls, v: str) -> str:
         if v not in ["CE", "PE", "CALL", "PUT"]:
             raise ValueError("option_type must be CE, PE, CALL, or PUT")
         return v
@@ -52,8 +53,9 @@ class OptionChain(BaseModel):
     put_options: list[OptionData] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.now)
 
-    @validator("expiry_date")
-    def validate_expiry_date(cls, v):
+    @field_validator("expiry_date")
+    @classmethod
+    def validate_expiry_date(cls, v: str) -> str:
         try:
             datetime.strptime(v, "%Y-%m-%d")
             return v
