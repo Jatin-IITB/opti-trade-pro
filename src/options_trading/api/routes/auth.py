@@ -19,6 +19,7 @@ from ...models.auth import (
 from ...services.auth_service import AuthService
 from ...utils.auth_dependencies import get_current_user
 from ...utils.exceptions import AuthError, TokenRefreshError
+from ...utils.rate_limit import rate_limit_callback, rate_limit_login, rate_limit_refresh
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -40,6 +41,7 @@ def _prune_states(app):
 
 
 @router.get("/login")
+@rate_limit_login
 async def initiate_login(request: Request, user_id: str | None = "default") -> RedirectResponse:
     """Initiate OAuth2 login flow."""
     settings = get_settings()
@@ -87,6 +89,7 @@ async def initiate_login(request: Request, user_id: str | None = "default") -> R
 
 
 @router.get("/callback")
+@rate_limit_callback
 async def oauth_callback(
     request: Request,
     code: str | None = None,
@@ -243,7 +246,10 @@ async def validate_token(access_token: str) -> TokenValidationResponse:
 
 
 @router.post("/refresh")
-async def refresh_token(refresh_token: str, user_id: str = "default") -> dict[str, str]:
+@rate_limit_refresh
+async def refresh_token(
+    request: Request, refresh_token: str, user_id: str = "default"
+) -> dict[str, str]:
     try:
         async with AuthService() as auth_service:
             token_info = await auth_service.refresh_token(refresh_token, user_id)

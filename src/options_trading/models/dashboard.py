@@ -9,7 +9,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class AlertLevel(str, Enum):
@@ -59,15 +59,20 @@ class AuthenticationStatus(BaseModel):
     last_login: datetime | None = None
     permissions: list[str] = Field(default_factory=list)
 
-    @validator("time_until_expiry", pre=True, always=True)
-    def calculate_time_until_expiry(cls, v, values):
-        if values.get("token_expires_at"):
-            delta = values["token_expires_at"] - datetime.now()
+    @model_validator(mode="before")
+    @classmethod
+    def calculate_time_until_expiry(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("token_expires_at"):
+            delta = data["token_expires_at"] - datetime.now()
             if delta.total_seconds() > 0:
                 hours, remainder = divmod(int(delta.total_seconds()), 3600)
                 minutes, _ = divmod(remainder, 60)
-                return f"{hours}h {minutes}m"
-        return "Expired"
+                data["time_until_expiry"] = f"{hours}h {minutes}m"
+            else:
+                data["time_until_expiry"] = "Expired"
+        elif isinstance(data, dict) and not data.get("time_until_expiry"):
+            data["time_until_expiry"] = "Expired"
+        return data
 
 
 class MarketDataFeed(BaseModel):
@@ -92,21 +97,27 @@ class MarketDataStatus(BaseModel):
     feeds: list[MarketDataFeed] = Field(default_factory=list)
     response_time_ms: float = Field(default=0.0, ge=0.0)
 
-    @validator("data_quality", pre=True, always=True)
-    def determine_data_quality(cls, v, values):
-        feeds = values.get("feeds", [])
+    @model_validator(mode="before")
+    @classmethod
+    def determine_data_quality(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        feeds = data.get("feeds", [])
         if not feeds:
-            return "unknown"
-
-        total_error_rate = sum(feed.error_rate for feed in feeds) / len(feeds)
+            data["data_quality"] = "unknown"
+            return data
+        total_error_rate = sum(
+            f.error_rate if hasattr(f, "error_rate") else f.get("error_rate", 0) for f in feeds
+        ) / len(feeds)
         if total_error_rate <= 1.0:
-            return "excellent"
+            data["data_quality"] = "excellent"
         elif total_error_rate <= 5.0:
-            return "good"
+            data["data_quality"] = "good"
         elif total_error_rate <= 15.0:
-            return "fair"
+            data["data_quality"] = "fair"
         else:
-            return "poor"
+            data["data_quality"] = "poor"
+        return data
 
 
 class GreeksSnapshot(BaseModel):
@@ -153,15 +164,19 @@ class StrategyPerformance(BaseModel):
     portfolio_greeks: GreeksSnapshot | None = None
     positions: list[PositionData] = Field(default_factory=list)
 
-    @validator("risk_level", pre=True, always=True)
-    def calculate_risk_level(cls, v, values):
-        pnl_pct = values.get("pnl_percentage", 0)
-        if abs(pnl_pct) <= 2.0:
-            return "low"
-        elif abs(pnl_pct) <= 5.0:
-            return "medium"
+    @model_validator(mode="before")
+    @classmethod
+    def calculate_risk_level(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        pnl_pct = data.get("pnl_percentage", 0)
+        if abs(float(pnl_pct)) <= 2.0:
+            data["risk_level"] = "low"
+        elif abs(float(pnl_pct)) <= 5.0:
+            data["risk_level"] = "medium"
         else:
-            return "high"
+            data["risk_level"] = "high"
+        return data
 
 
 class PositionSummary(BaseModel):
@@ -236,33 +251,55 @@ class SystemStatus(BaseModel):
     recent_logs: list[LogEntry] = Field(default_factory=list)
     alerts: list[dict[str, Any]] = Field(default_factory=list)
 
-    @validator("overall_health", pre=True, always=True)
-    def determine_overall_health(cls, v, values):
-        auth = values.get("authentication")
-        market_data = values.get("market_data")
-        system_metrics = values.get("system_metrics")
+    @model_validator(mode="before")
+    @classmethod
+    def determine_overall_health(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        auth = data.get("authentication")
+        market_data = data.get("market_data")
+        system_metrics = data.get("system_metrics")
 
-        if not auth or not auth.is_authenticated:
-            return SystemHealth.CRITICAL
+        health = SystemHealth.HEALTHY
 
-        if market_data and market_data.overall_status == ConnectionStatus.DISCONNECTED:
-            return SystemHealth.CRITICAL
+        if (
+            not auth
+            or (hasattr(auth, "is_authenticated") and not auth.is_authenticated)
+            or (isinstance(auth, dict) and not auth.get("is_authenticated"))
+        ):
+            health = SystemHealth.CRITICAL
+        elif market_data:
+            status = (
+                market_data.overall_status
+                if hasattr(market_data, "overall_status")
+                else market_data.get("overall_status")
+            )
+            if status == ConnectionStatus.DISCONNECTED or status == "disconnected":
+                health = SystemHealth.CRITICAL
 
-        if system_metrics:
-            if (
-                system_metrics.cpu_usage_percent > 90
-                or system_metrics.memory_usage_percent > 90
-                or system_metrics.error_count > 10
-            ):
-                return SystemHealth.CRITICAL
-            elif (
-                system_metrics.cpu_usage_percent > 70
-                or system_metrics.memory_usage_percent > 70
-                or system_metrics.error_count > 5
-            ):
-                return SystemHealth.WARNING
+        if health == SystemHealth.HEALTHY and system_metrics:
+            cpu = (
+                system_metrics.cpu_usage_percent
+                if hasattr(system_metrics, "cpu_usage_percent")
+                else system_metrics.get("cpu_usage_percent", 0)
+            )
+            mem = (
+                system_metrics.memory_usage_percent
+                if hasattr(system_metrics, "memory_usage_percent")
+                else system_metrics.get("memory_usage_percent", 0)
+            )
+            errs = (
+                system_metrics.error_count
+                if hasattr(system_metrics, "error_count")
+                else system_metrics.get("error_count", 0)
+            )
+            if cpu > 90 or mem > 90 or errs > 10:
+                health = SystemHealth.CRITICAL
+            elif cpu > 70 or mem > 70 or errs > 5:
+                health = SystemHealth.WARNING
 
-        return SystemHealth.HEALTHY
+        data["overall_health"] = health
+        return data
 
 
 class DashboardConfig(BaseModel):
