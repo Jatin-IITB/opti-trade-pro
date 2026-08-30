@@ -6,6 +6,11 @@ import {
   RefreshCw,
   LogOut,
   Plug,
+  Settings,
+  X,
+  Eye,
+  EyeOff,
+  Loader2,
 } from "lucide-react";
 import { useAuthStatus, type AuthStatus } from "../hooks/useAuthStatus";
 
@@ -13,11 +18,21 @@ interface BrokerConnector {
   id: string;
   name: string;
   description: string;
-  status: "connected" | "disconnected" | "coming_soon";
+  status: "connected" | "configured" | "disconnected" | "coming_soon";
   logoText: string;
   logoGradient: string;
   features: string[];
   authUrl?: string;
+}
+
+interface FieldSchema {
+  field: string;
+  label: string;
+  type: string;
+  required: boolean;
+  secret: boolean;
+  hint?: string;
+  default?: string;
 }
 
 interface SyncStatus {
@@ -54,6 +69,14 @@ function StatusBadge({ status }: { status: BrokerConnector["status"] }) {
       </span>
     );
   }
+  if (status === "configured") {
+    return (
+      <span className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-blue-900/30 text-blue-400 border border-blue-700/50">
+        <Settings size={12} />
+        Configured
+      </span>
+    );
+  }
   if (status === "coming_soon") {
     return (
       <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-slate-800 text-slate-500 border border-slate-700">
@@ -69,10 +92,242 @@ function StatusBadge({ status }: { status: BrokerConnector["status"] }) {
   );
 }
 
+function SetupModal({
+  broker,
+  onClose,
+  onSaved,
+}: {
+  broker: BrokerConnector;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [schema, setSchema] = useState<FieldSchema[]>([]);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetch(`/api/v1/connectors/schema/${broker.id}`);
+        if (!resp.ok) throw new Error("Failed to load schema");
+        const data = await resp.json();
+        setSchema(data.fields);
+        const defaults: Record<string, string> = {};
+        for (const f of data.fields) {
+          if (f.default) defaults[f.field] = f.default;
+        }
+
+        const existing = await fetch(`/api/v1/connectors/${broker.id}`);
+        if (existing.ok) {
+          const cfg = await existing.json();
+          if (cfg.configured && cfg.config) {
+            for (const [k, v] of Object.entries(cfg.config)) {
+              if (typeof v === "string") defaults[k] = v;
+            }
+          }
+        }
+        setValues(defaults);
+      } catch {
+        setError("Backend is not running. Start the server first.");
+      }
+    })();
+  }, [broker.id]);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await fetch(`/api/v1/connectors/${broker.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      const resp = await fetch(`/api/v1/connectors/${broker.id}/test`, {
+        method: "POST",
+      });
+      const result = await resp.json();
+      setTestResult(result);
+    } catch {
+      setTestResult({
+        success: false,
+        message: "Failed to reach backend.",
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const resp = await fetch(`/api/v1/connectors/${broker.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json();
+        throw new Error(data.detail || "Save failed");
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-slate-800 rounded-2xl border border-slate-700 w-full max-w-lg mx-4 shadow-2xl">
+        <div className="flex items-center justify-between p-5 border-b border-slate-700">
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-8 h-8 rounded-lg bg-gradient-to-br ${broker.logoGradient} flex items-center justify-center text-white font-bold text-xs`}
+            >
+              {broker.logoText}
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">
+                Configure {broker.name}
+              </h3>
+              <p className="text-xs text-slate-500">
+                Enter your API credentials from the developer console
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {error && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-900/20 border border-red-800/30 text-red-400 text-xs">
+              <AlertCircle size={14} className="shrink-0" />
+              {error}
+            </div>
+          )}
+
+          {schema.map((field) => (
+            <div key={field.field}>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                {field.label}
+                {field.required && (
+                  <span className="text-red-400 ml-0.5">*</span>
+                )}
+              </label>
+              <div className="relative">
+                <input
+                  type={
+                    field.secret && !showSecrets[field.field]
+                      ? "password"
+                      : "text"
+                  }
+                  value={values[field.field] || ""}
+                  onChange={(e) =>
+                    setValues((v) => ({
+                      ...v,
+                      [field.field]: e.target.value,
+                    }))
+                  }
+                  placeholder={field.hint}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-600 text-sm text-slate-200 placeholder:text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/30 font-mono transition-colors"
+                />
+                {field.secret && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowSecrets((s) => ({
+                        ...s,
+                        [field.field]: !s[field.field],
+                      }))
+                    }
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    {showSecrets[field.field] ? (
+                      <EyeOff size={14} />
+                    ) : (
+                      <Eye size={14} />
+                    )}
+                  </button>
+                )}
+              </div>
+              {field.hint && (
+                <p className="text-[10px] text-slate-600 mt-1">{field.hint}</p>
+              )}
+            </div>
+          ))}
+
+          {testResult && (
+            <div
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
+                testResult.success
+                  ? "bg-emerald-900/20 border border-emerald-800/30 text-emerald-400"
+                  : "bg-red-900/20 border border-red-800/30 text-red-400"
+              }`}
+            >
+              {testResult.success ? (
+                <CheckCircle size={14} />
+              ) : (
+                <AlertCircle size={14} />
+              )}
+              {testResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between p-5 border-t border-slate-700">
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 active:scale-95 transition-all disabled:opacity-50"
+          >
+            {testing ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} />
+            )}
+            {testing ? "Testing..." : "Test Connection"}
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-slate-400 text-xs font-medium hover:text-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-500 active:scale-95 transition-all disabled:opacity-50"
+            >
+              {saving && <Loader2 size={12} className="animate-spin" />}
+              Save & Continue
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConnectorCard({
   connector,
   auth,
   syncStatus,
+  onSetup,
   onConnect,
   onDisconnect,
   onRefreshAuth,
@@ -80,21 +335,26 @@ function ConnectorCard({
   connector: BrokerConnector;
   auth: AuthStatus | null;
   syncStatus: SyncStatus | null;
+  onSetup: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onRefreshAuth: () => void;
 }) {
   const isConnected = connector.status === "connected";
+  const isConfigured = connector.status === "configured";
   const isComingSoon = connector.status === "coming_soon";
+  const needsSetup = connector.status === "disconnected";
 
   return (
     <div
       className={`bg-slate-800/50 rounded-xl border p-5 transition-colors ${
         isConnected
           ? "border-emerald-700/50"
-          : isComingSoon
-            ? "border-slate-700/50 opacity-60"
-            : "border-slate-700 hover:border-slate-600"
+          : isConfigured
+            ? "border-blue-700/50"
+            : isComingSoon
+              ? "border-slate-700/50 opacity-60"
+              : "border-slate-700 hover:border-slate-600"
       }`}
     >
       <div className="flex items-start justify-between mb-4">
@@ -181,6 +441,12 @@ function ConnectorCard({
         {isConnected ? (
           <>
             <button
+              onClick={onSetup}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 hover:text-slate-100 active:scale-95 transition-all duration-150"
+            >
+              <Settings size={12} />
+            </button>
+            <button
               onClick={onRefreshAuth}
               className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 hover:text-slate-100 active:scale-95 transition-all duration-150"
             >
@@ -192,7 +458,22 @@ function ConnectorCard({
               className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-900/20 text-red-400 text-xs font-medium hover:bg-red-900/40 active:scale-95 transition-all duration-150 border border-red-800/30"
             >
               <LogOut size={12} />
-              Disconnect
+            </button>
+          </>
+        ) : isConfigured ? (
+          <>
+            <button
+              onClick={onConnect}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-500 active:scale-95 transition-all duration-150"
+            >
+              <ExternalLink size={12} />
+              Login with {connector.name}
+            </button>
+            <button
+              onClick={onSetup}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 hover:text-slate-100 active:scale-95 transition-all duration-150"
+            >
+              <Settings size={12} />
             </button>
           </>
         ) : isComingSoon ? (
@@ -205,11 +486,11 @@ function ConnectorCard({
           </button>
         ) : (
           <button
-            onClick={onConnect}
+            onClick={onSetup}
             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-500 active:scale-95 transition-all duration-150"
           >
-            <ExternalLink size={12} />
-            Connect with {connector.name}
+            <Settings size={12} />
+            Setup {connector.name}
           </button>
         )}
       </div>
@@ -276,13 +557,22 @@ const BROKERS: BrokerConnector[] = [
 ];
 
 export function ConnectorsPanel() {
-  const { status: authStatus, loading: authLoading, refresh: refreshAuth } = useAuthStatus();
+  const {
+    status: authStatus,
+    loading: authLoading,
+    refresh: refreshAuth,
+  } = useAuthStatus();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [setupBroker, setSetupBroker] = useState<BrokerConnector | null>(null);
+  const [connectorStates, setConnectorStates] = useState<
+    Record<string, boolean>
+  >({});
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     refreshAuth();
+    await fetchConnectorStates();
     setTimeout(() => setRefreshing(false), 800);
   }, [refreshAuth]);
 
@@ -299,6 +589,26 @@ export function ConnectorsPanel() {
     }
   }, []);
 
+  const fetchConnectorStates = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/v1/connectors/");
+      if (resp.ok) {
+        const data = await resp.json();
+        const states: Record<string, boolean> = {};
+        for (const c of data) {
+          states[c.broker_id] = c.configured;
+        }
+        setConnectorStates(states);
+      }
+    } catch {
+      /* backend may not be running */
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConnectorStates();
+  }, [fetchConnectorStates]);
+
   useEffect(() => {
     if (isUpstoxConnected) {
       fetchSyncStatus();
@@ -311,25 +621,22 @@ export function ConnectorsPanel() {
     if (b.id === "upstox" && isUpstoxConnected) {
       return { ...b, status: "connected" as const };
     }
+    if (connectorStates[b.id] && b.status !== "coming_soon") {
+      return { ...b, status: "configured" as const };
+    }
     return b;
   });
 
-  const configured = connectors.filter((c) => c.status === "connected");
-  const available = connectors.filter((c) => c.status !== "connected");
+  const configured = connectors.filter(
+    (c) => c.status === "connected" || c.status === "configured",
+  );
+  const available = connectors.filter(
+    (c) => c.status !== "connected" && c.status !== "configured",
+  );
 
-  const [connectError, setConnectError] = useState<string | null>(null);
-
-  const handleConnect = async (broker: BrokerConnector) => {
-    if (!broker.authUrl) return;
-    setConnectError(null);
-    try {
-      const resp = await fetch("/api/v1/auth/status");
-      if (!resp.ok) throw new Error();
+  const handleConnect = (broker: BrokerConnector) => {
+    if (broker.authUrl) {
       window.location.href = broker.authUrl;
-    } catch {
-      setConnectError(
-        "Backend is not running. Start the server (uvicorn) before connecting.",
-      );
     }
   };
 
@@ -345,15 +652,25 @@ export function ConnectorsPanel() {
   if (authLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="text-slate-400 text-sm">
-          Checking connections...
-        </div>
+        <div className="text-slate-400 text-sm">Checking connections...</div>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {setupBroker && (
+        <SetupModal
+          broker={setupBroker}
+          onClose={() => setSetupBroker(null)}
+          onSaved={() => {
+            setSetupBroker(null);
+            fetchConnectorStates();
+            refreshAuth();
+          }}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-100">Connectors</h2>
@@ -378,13 +695,6 @@ export function ConnectorsPanel() {
         </button>
       </div>
 
-      {connectError && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-900/20 border border-red-800/30 text-red-400 text-sm">
-          <AlertCircle size={16} className="shrink-0" />
-          {connectError}
-        </div>
-      )}
-
       {configured.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-3">
@@ -398,8 +708,13 @@ export function ConnectorsPanel() {
               <ConnectorCard
                 key={c.id}
                 connector={c}
-                auth={authStatus}
-                syncStatus={c.id === "upstox" ? syncStatus : null}
+                auth={c.status === "connected" ? authStatus : null}
+                syncStatus={
+                  c.id === "upstox" && c.status === "connected"
+                    ? syncStatus
+                    : null
+                }
+                onSetup={() => setSetupBroker(c)}
                 onConnect={() => handleConnect(c)}
                 onDisconnect={handleDisconnect}
                 onRefreshAuth={refreshAuth}
@@ -409,33 +724,37 @@ export function ConnectorsPanel() {
         </div>
       )}
 
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <h3 className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-            Available Brokers ({available.length})
-          </h3>
+      {available.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+              Available Brokers ({available.length})
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {available.map((c) => (
+              <ConnectorCard
+                key={c.id}
+                connector={c}
+                auth={null}
+                syncStatus={null}
+                onSetup={() => setSetupBroker(c)}
+                onConnect={() => handleConnect(c)}
+                onDisconnect={handleDisconnect}
+                onRefreshAuth={refreshAuth}
+              />
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {available.map((c) => (
-            <ConnectorCard
-              key={c.id}
-              connector={c}
-              auth={null}
-              syncStatus={null}
-              onConnect={() => handleConnect(c)}
-              onDisconnect={handleDisconnect}
-              onRefreshAuth={refreshAuth}
-            />
-          ))}
-        </div>
-      </div>
+      )}
 
       <div className="bg-slate-800/20 rounded-lg border border-slate-700/30 p-4 text-xs text-slate-500">
         <strong className="text-slate-400">How it works:</strong> Click
-        "Connect" to authenticate via your broker's OAuth page. Your access
-        token is encrypted at rest (Fernet) and auto-refreshes. OptiTrade Pro
-        is read-only &mdash; no orders are placed through this platform. Market
-        data and portfolio positions sync automatically during market hours.
+        &ldquo;Setup&rdquo; to enter your API credentials from your broker&apos;s
+        developer console. Credentials are encrypted at rest (Fernet). Then click
+        &ldquo;Login&rdquo; to authenticate via OAuth. OptiTrade Pro is
+        read-only &mdash; no orders are placed. Portfolio positions sync
+        automatically during market hours.
       </div>
     </div>
   );

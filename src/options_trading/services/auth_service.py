@@ -41,6 +41,20 @@ class AuthService:
         )
         self._http_client: httpx.AsyncClient | None = None
 
+    async def load_connector_credentials(self) -> None:
+        """Override OAuth config from connector store if configured via UI."""
+        from .connector_store import ConnectorStore
+
+        store = ConnectorStore()
+        config = await store.get_config("upstox")
+        if config and config.get("api_key") and config.get("api_secret"):
+            self.oauth_config = OAuthConfig(
+                client_id=config["api_key"],
+                client_secret=config["api_secret"],
+                redirect_uri=config.get("redirect_uri", self.settings.oauth_redirect_uri),
+            )
+            logger.info("OAuth config loaded from connector store (UI-configured)")
+
     async def __aenter__(self):
         """Async context manager entry."""
         self._http_client = httpx.AsyncClient(

@@ -21,6 +21,7 @@ from .api.routes.auth import router as auth_router
 from .api.routes.backtesting import router as backtesting_router
 from .api.routes.capture import router as capture_router
 from .api.routes.dashboard import router as dashboard_router
+from .api.routes.connectors import router as connectors_router
 from .api.routes.market_data import router as market_data_router
 from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
@@ -174,6 +175,7 @@ def create_app() -> FastAPI:
     app.include_router(backtesting_router, prefix="/api/v1")
     app.include_router(analytics_router, prefix="/api/v1")
     app.include_router(capture_router, prefix="/api/v1")
+    app.include_router(connectors_router, prefix="/api/v1")
 
     # Exception handlers
     @app.exception_handler(OptionsTradinError)

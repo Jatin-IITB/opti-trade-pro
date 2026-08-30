@@ -19,7 +19,10 @@ from ...models.auth import (
 from ...services.auth_service import AuthService
 from ...utils.auth_dependencies import get_current_user
 from ...utils.exceptions import AuthError, TokenRefreshError
+from ...services.connector_store import ConnectorStore
 from ...utils.rate_limit import rate_limit_callback, rate_limit_login, rate_limit_refresh
+
+_connector_store = ConnectorStore()
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -66,10 +69,18 @@ async def initiate_login(request: Request, user_id: str | None = "default") -> R
         request.session["oauth_state"] = state
         request.session["user_id"] = user_id
 
+        connector_config = await _connector_store.get_config("upstox")
+        client_id = connector_config["api_key"] if connector_config else settings.upstox_api_key
+        redirect_uri = (
+            connector_config.get("redirect_uri", settings.oauth_redirect_uri)
+            if connector_config
+            else settings.oauth_redirect_uri
+        )
+
         params = {
             "response_type": "code",
-            "client_id": settings.upstox_api_key,
-            "redirect_uri": settings.oauth_redirect_uri,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
             "state": state,
         }
         auth_url = f"https://api-v2.upstox.com/login/authorization/dialog?{urlencode(params)}"
@@ -144,6 +155,7 @@ async def oauth_callback(
 
     try:
         async with AuthService() as auth_service:
+            await auth_service.load_connector_credentials()
             callback_request = OAuthCallbackRequest(code=code, state=state)
             token_info = await auth_service.exchange_code_for_tokens(callback_request)
 
@@ -195,6 +207,7 @@ async def oauth_callback(
 async def api_oauth_callback(callback: OAuthCallbackRequest) -> OAuthCallbackResponse:
     try:
         async with AuthService() as auth_service:
+            await auth_service.load_connector_credentials()
             token_info = await auth_service.exchange_code_for_tokens(callback)
             return OAuthCallbackResponse(
                 success=True,
