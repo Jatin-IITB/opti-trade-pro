@@ -238,7 +238,7 @@ export default function App() {
       <footer className="border-t border-slate-800 py-4 mt-auto">
         <div className="max-w-[1400px] mx-auto px-6 flex justify-between text-xs text-slate-500">
           <span>
-            4 Greeks methods cross-validated &middot; 23 ADRs &middot;
+            4 Greeks methods cross-validated &middot; 26 ADRs &middot;
             fail-closed risk engine
           </span>
           <span>OptiTrade Pro v3.0</span>
