@@ -12,7 +12,10 @@ import {
   Activity,
   Target,
 } from "lucide-react";
-import demoData from "./data/demo.json";
+import {
+  DashboardDataProvider,
+  useDashboardData,
+} from "./context/DashboardDataContext";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
 import { PnlWaterfall } from "./components/PnlWaterfall";
@@ -76,8 +79,22 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export default function App() {
+const MODE_BADGE = {
+  live: { text: "LIVE", className: "bg-emerald-900/60 text-emerald-400" },
+  connecting: {
+    text: "Connecting…",
+    className: "bg-yellow-900/60 text-yellow-400 animate-pulse",
+  },
+  demo: { text: "Demo Mode", className: "bg-slate-800 text-teal-400" },
+} as const;
+
+function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>("surface");
+  const { mode, data, spot, underlying, lastUpdate, error } =
+    useDashboardData();
+
+  const badge = MODE_BADGE[mode];
+  const displaySpot = spot ?? data.volSurface.spot;
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -100,16 +117,26 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-400">
             <span>
-              NIFTY{" "}
+              {underlying}{" "}
               <span className="text-emerald-400 font-mono">
-                {demoData.volSurface.spot.toLocaleString()}
+                {displaySpot.toLocaleString()}
               </span>
             </span>
-            <span className="px-2 py-1 rounded bg-slate-800 text-teal-400 font-mono">
-              Demo Mode
+            {lastUpdate && mode === "live" && (
+              <span className="font-mono text-slate-500">
+                {new Date(lastUpdate).toLocaleTimeString()}
+              </span>
+            )}
+            <span className={`px-2 py-1 rounded font-mono ${badge.className}`}>
+              {badge.text}
             </span>
           </div>
         </div>
+        {error && (
+          <div className="max-w-[1400px] mx-auto px-6 pb-2">
+            <span className="text-xs text-yellow-400">{error}</span>
+          </div>
+        )}
       </header>
 
       <nav
@@ -139,32 +166,30 @@ export default function App() {
       <main className="max-w-[1400px] mx-auto px-6 py-6">
         <ErrorBoundary>
           {activeTab === "surface" && (
-            <VolSurface data={demoData.volSurface} />
+            <VolSurface data={data.volSurface} />
           )}
           {activeTab === "essvi" && (
-            <EssviCalibration data={demoData.essviCalibration} />
+            <EssviCalibration data={data.essviCalibration} />
           )}
           {activeTab === "greeks" && (
-            <GreeksBook data={demoData.greeksComparison} />
+            <GreeksBook data={data.greeksComparison} />
           )}
           {activeTab === "scenarios" && (
-            <ScenarioHeatmap data={demoData.scenarioGrid} />
+            <ScenarioHeatmap data={data.scenarioGrid} />
           )}
-          {activeTab === "pnl" && (
-            <PnlWaterfall data={demoData.pnlExplain} />
-          )}
+          {activeTab === "pnl" && <PnlWaterfall data={data.pnlExplain} />}
           {activeTab === "higher" && (
-            <HigherOrderGreeks data={demoData.higherOrderGreeks} />
+            <HigherOrderGreeks data={data.higherOrderGreeks} />
           )}
           {activeTab === "chain" && (
-            <OptionChain data={demoData.optionChain} />
+            <OptionChain data={data.optionChain} />
           )}
           {activeTab === "backtest" && (
-            <BacktestEquity data={demoData.backtestEquity} />
+            <BacktestEquity data={data.backtestEquity} />
           )}
-          {activeTab === "vrp" && <VrpSignal data={demoData.vrpSignal} />}
+          {activeTab === "vrp" && <VrpSignal data={data.vrpSignal} />}
           {activeTab === "risk" && (
-            <RiskDashboard data={demoData.riskDashboard} />
+            <RiskDashboard data={data.riskDashboard} />
           )}
         </ErrorBoundary>
       </main>
@@ -179,5 +204,13 @@ export default function App() {
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <DashboardDataProvider>
+      <Dashboard />
+    </DashboardDataProvider>
   );
 }
