@@ -12,6 +12,7 @@ import {
   Activity,
   Target,
   Briefcase,
+  Plug,
 } from "lucide-react";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
@@ -25,6 +26,7 @@ import { VrpSignal } from "./components/VrpSignal";
 import { RiskDashboard } from "./components/RiskDashboard";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
+import { ConnectorsPanel } from "./components/ConnectorsPanel";
 import { usePortfolio } from "./hooks/usePortfolio";
 import { useLiveData } from "./hooks/useLiveData";
 
@@ -77,6 +79,7 @@ const TABS = [
   { id: "vrp", label: "VRP Signal", icon: Activity },
   { id: "risk", label: "Risk", icon: Shield },
   { id: "portfolio", label: "Portfolio", icon: Briefcase },
+  { id: "connectors", label: "Connectors", icon: Plug },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -228,6 +231,7 @@ export default function App() {
               )}
             </div>
           )}
+          {activeTab === "connectors" && <ConnectorsPanel />}
         </ErrorBoundary>
       </main>
 
