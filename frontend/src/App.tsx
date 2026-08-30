@@ -11,6 +11,7 @@ import {
   Shield,
   Activity,
   Target,
+  Briefcase,
 } from "lucide-react";
 import demoData from "./data/demo.json";
 import { VolSurface } from "./components/VolSurface";
@@ -23,6 +24,9 @@ import { EssviCalibration } from "./components/EssviCalibration";
 import { BacktestEquity } from "./components/BacktestEquity";
 import { VrpSignal } from "./components/VrpSignal";
 import { RiskDashboard } from "./components/RiskDashboard";
+import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
+import { PositionSignals } from "./components/PositionSignals";
+import { usePortfolio } from "./hooks/usePortfolio";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -72,12 +76,14 @@ const TABS = [
   { id: "backtest", label: "Backtest", icon: LineChart },
   { id: "vrp", label: "VRP Signal", icon: Activity },
   { id: "risk", label: "Risk", icon: Shield },
+  { id: "portfolio", label: "Portfolio", icon: Briefcase },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("surface");
+  const portfolio = usePortfolio();
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -165,6 +171,20 @@ export default function App() {
           {activeTab === "vrp" && <VrpSignal data={demoData.vrpSignal} />}
           {activeTab === "risk" && (
             <RiskDashboard data={demoData.riskDashboard} />
+          )}
+          {activeTab === "portfolio" && (
+            <div className="space-y-6">
+              <PortfolioSummaryPanel
+                summary={portfolio.summary}
+                syncStatus={portfolio.syncStatus}
+                loading={portfolio.loading}
+                error={portfolio.error}
+                onRefresh={portfolio.refresh}
+              />
+              {portfolio.summary?.synced && (
+                <PositionSignals signals={portfolio.signals} />
+              )}
+            </div>
           )}
         </ErrorBoundary>
       </main>
