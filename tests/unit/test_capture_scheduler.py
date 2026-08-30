@@ -348,7 +348,7 @@ START_BODY = {
 class StubScheduler:
     """Deterministic CaptureScheduler stand-in: run() waits for stop(), no clock."""
 
-    def __init__(self, capture_fn, config, clock=None, sleeper=None) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, capture_fn, config, clock=None, sleeper=None, on_capture=None) -> None:  # type: ignore[no-untyped-def]
         self.capture_fn = capture_fn
         self.config = config
         self._running = False

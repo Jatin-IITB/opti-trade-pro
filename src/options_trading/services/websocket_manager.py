@@ -267,6 +267,25 @@ class WebSocketManager:
 
         await self.broadcast_update(message)
 
+    async def send_dashboard_update(self, payload: dict[str, Any]) -> int:
+        """Broadcast a full live-analytics snapshot to all connected clients."""
+        message = {
+            "type": "dashboard_update",
+            "data": payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+        return await self.broadcast_update(message)
+
+    async def send_vol_surface_update(self, underlying: str, data: dict[str, Any]) -> int:
+        """Broadcast a vol-surface update to subscribers of ``underlying``."""
+        message = {
+            "type": "vol_surface_update",
+            "underlying": underlying,
+            "data": data,
+            "timestamp": datetime.now().isoformat(),
+        }
+        return await self.broadcast_to_symbol_subscribers(underlying, message)
+
     def has_active_connections(self) -> bool:
         """Check if there are any active connections"""
         return len(self.connections) > 0

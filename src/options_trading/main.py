@@ -26,6 +26,7 @@ from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
 from .services.auth_service import AuthService
 from .services.dashboard_service import DashboardService
+from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
 from .services.strategy_service import StrategyService
 from .services.websocket_manager import WebSocketManager
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("🔌 Initializing WebSocket manager...")
     app.state.websocket_manager = websocket_manager
+
+    logger.info("📡 Initializing live pipeline service...")
+    app.state.live_pipeline = LivePipelineService(
+        ws_manager=websocket_manager,
+        config=LivePipelineConfig(),
+    )
 
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")

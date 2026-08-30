@@ -155,12 +155,20 @@ async def start_capture_schedule(
     store = _snapshot_store()
     underlying = body.underlying
 
+    pipeline = getattr(request.app.state, "live_pipeline", None)
+
     def capture_once() -> CaptureReport:
-        return capture_and_store(source, store, underlying)
+        report = capture_and_store(source, store, underlying)
+        if pipeline is not None:
+            chain = source.fetch_chain(underlying)
+            pipeline.cache_chain(chain)
+        return report
 
     interval = body.interval_seconds or settings.capture_interval_seconds
     scheduler = CaptureScheduler(
-        capture_fn=capture_once, config=ScheduleConfig(interval_seconds=interval)
+        capture_fn=capture_once,
+        config=ScheduleConfig(interval_seconds=interval),
+        on_capture=pipeline.on_capture if pipeline is not None else None,
     )
     request.app.state.capture_scheduler = scheduler
     request.app.state.capture_scheduler_task = asyncio.create_task(scheduler.run())
