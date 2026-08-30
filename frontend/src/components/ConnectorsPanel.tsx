@@ -182,14 +182,14 @@ function ConnectorCard({
           <>
             <button
               onClick={onRefreshAuth}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 transition-colors"
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-600 hover:text-slate-100 active:scale-95 transition-all duration-150"
             >
               <RefreshCw size={12} />
               Refresh Token
             </button>
             <button
               onClick={onDisconnect}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-900/20 text-red-400 text-xs font-medium hover:bg-red-900/40 transition-colors border border-red-800/30"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-900/20 text-red-400 text-xs font-medium hover:bg-red-900/40 active:scale-95 transition-all duration-150 border border-red-800/30"
             >
               <LogOut size={12} />
               Disconnect
@@ -206,7 +206,7 @@ function ConnectorCard({
         ) : (
           <button
             onClick={onConnect}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-500 transition-colors"
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-500 active:scale-95 transition-all duration-150"
           >
             <ExternalLink size={12} />
             Connect with {connector.name}
@@ -278,6 +278,13 @@ const BROKERS: BrokerConnector[] = [
 export function ConnectorsPanel() {
   const { status: authStatus, loading: authLoading, refresh: refreshAuth } = useAuthStatus();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    refreshAuth();
+    setTimeout(() => setRefreshing(false), 800);
+  }, [refreshAuth]);
 
   const isUpstoxConnected = authStatus?.authenticated === true;
 
@@ -355,11 +362,19 @@ export function ConnectorsPanel() {
           </p>
         </div>
         <button
-          onClick={refreshAuth}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs hover:bg-slate-600 transition-colors"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+            refreshing
+              ? "bg-emerald-900/30 text-emerald-400 border border-emerald-700/50"
+              : "bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-slate-100 active:scale-95"
+          }`}
         >
-          <RefreshCw size={12} />
-          Refresh
+          <RefreshCw
+            size={12}
+            className={refreshing ? "animate-spin" : ""}
+          />
+          {refreshing ? "Refreshed" : "Refresh"}
         </button>
       </div>
 
