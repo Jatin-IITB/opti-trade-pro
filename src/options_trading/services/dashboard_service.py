@@ -41,10 +41,14 @@ class DashboardService:
     """
 
     def __init__(
-        self, market_data_manager: MarketDataManager | None = None, cache: AsyncCache | None = None
+        self,
+        market_data_manager: MarketDataManager | None = None,
+        cache: AsyncCache | None = None,
+        portfolio_sync: object | None = None,
     ):
         self.settings = get_settings()
         self.market_data_manager = market_data_manager
+        self._portfolio_sync = portfolio_sync
         self._system_start_time = datetime.now()
 
         # FIXED: Use correct AsyncCache initialization
@@ -364,9 +368,10 @@ class DashboardService:
     async def get_positions_summary(
         self, symbol: str | None = None, expiry_date: str | None = None
     ) -> PositionSummary:
-        """
-        Get aggregated portfolio position summary with real-time Greeks.
-        This aggregates data from all strategies via StrategyService.
+        """Get aggregated portfolio position summary with real-time Greeks.
+
+        Uses real portfolio data from PortfolioSyncService when available,
+        otherwise returns demo data.
         """
         try:
             cache_key = f"positions_summary_{symbol}_{expiry_date}"
@@ -374,20 +379,7 @@ class DashboardService:
             if cached_summary:
                 return cached_summary
 
-            # This would aggregate data from StrategyService
-            summary = PositionSummary(
-                total_positions=24,
-                active_strategies=2,
-                total_pnl=Decimal("18000.00"),
-                daily_pnl=Decimal("4250.00"),
-                margin_used=Decimal("245000.00"),
-                available_margin=Decimal("355000.00"),
-                portfolio_delta=Decimal("0.02"),
-                portfolio_gamma=Decimal("0.68"),
-                portfolio_theta=Decimal("-148.03"),
-                portfolio_vega=Decimal("258.46"),
-                concentration_risk={"NIFTY": 65.5, "BANKNIFTY": 25.2, "FINNIFTY": 9.3},
-            )
+            summary = self._positions_summary_from_sync()
 
             await self._cache.set_by_key(cache_key, summary, ttl=60)
             return summary
@@ -396,38 +388,50 @@ class DashboardService:
             logger.error(f"Failed to get positions summary: {e}")
             raise DataQualityError(f"Positions data unavailable: {e!s}")
 
+    def _positions_summary_from_sync(self) -> PositionSummary:
+        if self._portfolio_sync is not None:
+            portfolio = self._portfolio_sync.get_latest_portfolio()
+            if portfolio is not None:
+                positions = self._portfolio_sync.get_latest_positions()
+                total_pnl = sum(p.pnl for p in positions)
+                return PositionSummary(
+                    total_positions=len(positions),
+                    active_strategies=0,
+                    total_pnl=Decimal(str(round(total_pnl, 2))),
+                    daily_pnl=Decimal(str(round(total_pnl, 2))),
+                    margin_used=Decimal("0.00"),
+                    available_margin=Decimal(str(round(portfolio.margin_available, 2))),
+                    portfolio_delta=Decimal("0.00"),
+                    portfolio_gamma=Decimal("0.00"),
+                    portfolio_theta=Decimal("0.00"),
+                    portfolio_vega=Decimal("0.00"),
+                    concentration_risk={},
+                )
+        return PositionSummary(
+            total_positions=0,
+            active_strategies=0,
+            total_pnl=Decimal("0.00"),
+            daily_pnl=Decimal("0.00"),
+            margin_used=Decimal("0.00"),
+            available_margin=Decimal("0.00"),
+            portfolio_delta=Decimal("0.00"),
+            portfolio_gamma=Decimal("0.00"),
+            portfolio_theta=Decimal("0.00"),
+            portfolio_vega=Decimal("0.00"),
+            concentration_risk={},
+        )
+
     async def calculate_risk_metrics(self) -> RiskMetrics:
-        """
-        Calculate comprehensive portfolio risk metrics.
-        Uses sophisticated risk models for institutional trading.
+        """Calculate comprehensive portfolio risk metrics.
+
+        Uses real portfolio data when available, otherwise returns zeroed metrics.
         """
         try:
             cached_metrics = await self._cache.get_by_key("risk_metrics")
             if cached_metrics:
                 return cached_metrics
 
-            # This would integrate with your risk calculation engine
-            metrics = RiskMetrics(
-                var_1d=Decimal("25000.00"),
-                var_1d_percentage=Decimal("4.17"),
-                expected_shortfall=Decimal("31250.00"),
-                maximum_drawdown=Decimal("18500.00"),
-                beta=Decimal("0.85"),
-                portfolio_delta=Decimal("0.02"),
-                portfolio_gamma=Decimal("0.68"),
-                portfolio_theta=Decimal("-148.03"),
-                portfolio_vega=Decimal("258.46"),
-                portfolio_rho=Decimal("45.78"),
-                delta_limit_utilization=12.5,
-                gamma_limit_utilization=34.2,
-                vega_limit_utilization=25.8,
-                concentration_limits={"single_symbol": 35.0, "sector": 60.0, "expiry": 45.0},
-                stress_test_results={
-                    "market_crash_2008": Decimal("-125000.00"),
-                    "covid_crash_2020": Decimal("-89000.00"),
-                    "volatility_spike": Decimal("-67000.00"),
-                },
-            )
+            metrics = self._risk_metrics_from_sync()
 
             await self._cache.set_by_key("risk_metrics", metrics, ttl=300)
             return metrics
@@ -435,6 +439,51 @@ class DashboardService:
         except Exception as e:
             logger.error(f"Risk calculation failed: {e}")
             raise CalculationError(f"Risk metrics calculation failed: {e!s}")
+
+    def _risk_metrics_from_sync(self) -> RiskMetrics:
+        if self._portfolio_sync is not None:
+            portfolio = self._portfolio_sync.get_latest_portfolio()
+            if portfolio is not None:
+                positions = self._portfolio_sync.get_latest_positions()
+                total_pnl = sum(p.pnl for p in positions)
+                gross = portfolio.gross_notional
+                dd = portfolio.drawdown
+                return RiskMetrics(
+                    var_1d=Decimal(str(round(gross * 0.02, 2))),
+                    var_1d_percentage=Decimal("2.00"),
+                    expected_shortfall=Decimal(str(round(gross * 0.03, 2))),
+                    maximum_drawdown=Decimal(str(round(dd * gross, 2)))
+                    if gross > 0
+                    else Decimal("0.00"),
+                    beta=None,
+                    portfolio_delta=Decimal("0.00"),
+                    portfolio_gamma=Decimal("0.00"),
+                    portfolio_theta=Decimal("0.00"),
+                    portfolio_vega=Decimal("0.00"),
+                    portfolio_rho=Decimal("0.00"),
+                    delta_limit_utilization=0.0,
+                    gamma_limit_utilization=0.0,
+                    vega_limit_utilization=0.0,
+                    concentration_limits={},
+                    stress_test_results={},
+                )
+        return RiskMetrics(
+            var_1d=Decimal("0.00"),
+            var_1d_percentage=Decimal("0.00"),
+            expected_shortfall=Decimal("0.00"),
+            maximum_drawdown=Decimal("0.00"),
+            beta=None,
+            portfolio_delta=Decimal("0.00"),
+            portfolio_gamma=Decimal("0.00"),
+            portfolio_theta=Decimal("0.00"),
+            portfolio_vega=Decimal("0.00"),
+            portfolio_rho=Decimal("0.00"),
+            delta_limit_utilization=0.0,
+            gamma_limit_utilization=0.0,
+            vega_limit_utilization=0.0,
+            concentration_limits={},
+            stress_test_results={},
+        )
 
     async def get_dashboard_config(self, user_id: str) -> DashboardConfig:
         """Get user dashboard configuration"""

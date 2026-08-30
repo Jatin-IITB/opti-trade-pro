@@ -15,6 +15,7 @@ from optitrade.data.models import RawChain
 
 from .capture_service import CaptureReport
 from .live_analytics import LiveAnalytics, LiveAnalyticsConfig, LiveDashboardPayload
+from .portfolio_sync_service import PortfolioSyncService
 from .websocket_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,11 @@ class LivePipelineService:
         self,
         ws_manager: WebSocketManager,
         config: LivePipelineConfig = LivePipelineConfig(),
+        portfolio_sync: PortfolioSyncService | None = None,
     ) -> None:
         self._ws_manager = ws_manager
         self._config = config
+        self._portfolio_sync = portfolio_sync
         self._analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model=config.vol_model))
         self._last_payload: LiveDashboardPayload | None = None
         self._last_chain: RawChain | None = None
@@ -52,8 +55,13 @@ class LivePipelineService:
             return
 
         chain = self._last_chain
+        portfolio = None
+        if self._portfolio_sync is not None:
+            portfolio = self._portfolio_sync.get_latest_portfolio()
         try:
-            payload = await asyncio.to_thread(self._analytics.build_from_raw_chain, chain)
+            payload = await asyncio.to_thread(
+                self._analytics.build_from_raw_chain, chain, portfolio
+            )
         except Exception:
             logger.exception("Live analytics pipeline failed for %s", chain.underlying)
             return
