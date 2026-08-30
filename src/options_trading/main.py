@@ -28,6 +28,8 @@ from .services.auth_service import AuthService
 from .services.dashboard_service import DashboardService
 from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
+from .services.portfolio_client import UpstoxPortfolioClient
+from .services.portfolio_sync_service import PortfolioSyncConfig, PortfolioSyncService
 from .services.strategy_service import StrategyService
 from .services.websocket_manager import WebSocketManager
 from .utils.cache import AsyncCache
@@ -92,6 +94,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         logger.info("📈 StrategyService initialized")
 
+        portfolio_client = UpstoxPortfolioClient(access_token=access_token)
+        portfolio_sync = PortfolioSyncService(
+            client=portfolio_client,
+            ws_manager=websocket_manager,
+            config=PortfolioSyncConfig(
+                sync_interval_seconds=settings.portfolio_sync_interval_seconds,
+            ),
+        )
+        app.state.portfolio_sync = portfolio_sync
+        logger.info("📋 PortfolioSyncService initialized")
+
     except Exception as e:
         logger.warning(f"⚠️ Core services initialization failed: {e}")
         logger.info("🔄 Services will initialize after user authentication")
@@ -100,6 +113,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_service = None
         app.state.dashboard_service = None
         app.state.strategy_service = None
+        app.state.portfolio_sync = None
 
     yield
 

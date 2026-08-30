@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     # src/options_trading/config/settings.py
     upstox_option_contracts_url: str = Field(default="https://api.upstox.com/v2/option/contract")
     upstox_option_chain_url: str = Field(default="https://api.upstox.com/v2/option/chain")
+    upstox_holdings_url: str = Field(
+        default="https://api.upstox.com/v2/portfolio/long-term-holdings"
+    )
+    upstox_positions_url: str = Field(
+        default="https://api.upstox.com/v2/portfolio/short-term-positions"
+    )
+    upstox_orders_url: str = Field(default="https://api.upstox.com/v2/order/retrieve-all")
+    upstox_pnl_url: str = Field(default="https://api.upstox.com/v2/trade/profit-loss/data")
+    portfolio_sync_interval_seconds: int = Field(
+        default=60, description="Interval for portfolio sync from Upstox (seconds)"
+    )
 
     default_api_version: str = Field(default="2.0")
     default_accept_header: str = Field(default="application/json")
