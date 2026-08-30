@@ -276,6 +276,15 @@ class WebSocketManager:
         }
         return await self.broadcast_update(message)
 
+    async def send_portfolio_update(self, payload: dict[str, Any]) -> int:
+        """Broadcast a portfolio sync snapshot to all connected clients."""
+        message = {
+            "type": "portfolio_update",
+            "data": payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+        return await self.broadcast_update(message)
+
     async def send_vol_surface_update(self, underlying: str, data: dict[str, Any]) -> int:
         """Broadcast a vol-surface update to subscribers of ``underlying``."""
         message = {
