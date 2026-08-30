@@ -13,7 +13,6 @@ import {
   Target,
   Briefcase,
 } from "lucide-react";
-import demoData from "./data/demo.json";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
 import { PnlWaterfall } from "./components/PnlWaterfall";
@@ -27,6 +26,7 @@ import { RiskDashboard } from "./components/RiskDashboard";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
 import { usePortfolio } from "./hooks/usePortfolio";
+import { useLiveData } from "./hooks/useLiveData";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -81,9 +81,45 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+const STATUS_STYLE: Record<string, { dot: string; label: string; bg: string }> =
+  {
+    connected: {
+      dot: "bg-emerald-400",
+      label: "Live",
+      bg: "bg-emerald-900/30 text-emerald-400",
+    },
+    connecting: {
+      dot: "bg-amber-400 animate-pulse",
+      label: "Connecting…",
+      bg: "bg-amber-900/30 text-amber-400",
+    },
+    disconnected: {
+      dot: "bg-slate-500",
+      label: "Demo Mode",
+      bg: "bg-slate-800 text-teal-400",
+    },
+    error: {
+      dot: "bg-red-400",
+      label: "Demo Mode",
+      bg: "bg-slate-800 text-teal-400",
+    },
+  };
+
+function timeSince(ts: number | null): string {
+  if (!ts) return "";
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  return `${Math.floor(sec / 60)}m ago`;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("surface");
+  const live = useLiveData();
   const portfolio = usePortfolio();
+
+  const { data } = live;
+  const badge = STATUS_STYLE[live.status] ?? STATUS_STYLE.disconnected;
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -106,13 +142,21 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-400">
             <span>
-              NIFTY{" "}
+              {live.underlying}{" "}
               <span className="text-emerald-400 font-mono">
-                {demoData.volSurface.spot.toLocaleString()}
+                {live.spot.toLocaleString()}
               </span>
             </span>
-            <span className="px-2 py-1 rounded bg-slate-800 text-teal-400 font-mono">
-              Demo Mode
+            {live.lastUpdate && (
+              <span className="text-slate-500">
+                {timeSince(live.lastUpdate)}
+              </span>
+            )}
+            <span
+              className={`px-2 py-1 rounded font-mono flex items-center gap-1.5 ${badge.bg}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />
+              {badge.label}
             </span>
           </div>
         </div>
@@ -145,32 +189,30 @@ export default function App() {
       <main className="max-w-[1400px] mx-auto px-6 py-6">
         <ErrorBoundary>
           {activeTab === "surface" && (
-            <VolSurface data={demoData.volSurface} />
+            <VolSurface data={data.volSurface} />
           )}
           {activeTab === "essvi" && (
-            <EssviCalibration data={demoData.essviCalibration} />
+            <EssviCalibration data={data.essviCalibration} />
           )}
           {activeTab === "greeks" && (
-            <GreeksBook data={demoData.greeksComparison} />
+            <GreeksBook data={data.greeksComparison} />
           )}
           {activeTab === "scenarios" && (
-            <ScenarioHeatmap data={demoData.scenarioGrid} />
+            <ScenarioHeatmap data={data.scenarioGrid} />
           )}
-          {activeTab === "pnl" && (
-            <PnlWaterfall data={demoData.pnlExplain} />
-          )}
+          {activeTab === "pnl" && <PnlWaterfall data={data.pnlExplain} />}
           {activeTab === "higher" && (
-            <HigherOrderGreeks data={demoData.higherOrderGreeks} />
+            <HigherOrderGreeks data={data.higherOrderGreeks} />
           )}
           {activeTab === "chain" && (
-            <OptionChain data={demoData.optionChain} />
+            <OptionChain data={data.optionChain} />
           )}
           {activeTab === "backtest" && (
-            <BacktestEquity data={demoData.backtestEquity} />
+            <BacktestEquity data={data.backtestEquity} />
           )}
-          {activeTab === "vrp" && <VrpSignal data={demoData.vrpSignal} />}
+          {activeTab === "vrp" && <VrpSignal data={data.vrpSignal} />}
           {activeTab === "risk" && (
-            <RiskDashboard data={demoData.riskDashboard} />
+            <RiskDashboard data={data.riskDashboard} />
           )}
           {activeTab === "portfolio" && (
             <div className="space-y-6">
