@@ -17,9 +17,9 @@ from ...models.auth import (
     TokenValidationResponse,
 )
 from ...services.auth_service import AuthService
+from ...services.connector_store import ConnectorStore
 from ...utils.auth_dependencies import get_current_user
 from ...utils.exceptions import AuthError, TokenRefreshError
-from ...services.connector_store import ConnectorStore
 from ...utils.rate_limit import rate_limit_callback, rate_limit_login, rate_limit_refresh
 
 _connector_store = ConnectorStore()

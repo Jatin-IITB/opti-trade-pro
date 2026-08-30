@@ -148,7 +148,9 @@ async def _test_upstox(config: dict[str, str]) -> TestResult:
                         success=True,
                         message="Credentials valid — API key and redirect URI accepted by Upstox.",
                     )
-                return TestResult(success=False, message=f"Upstox error: {err.get('message', code)}")
+                return TestResult(
+                    success=False, message=f"Upstox error: {err.get('message', code)}"
+                )
 
             return TestResult(success=True, message="Credentials accepted by Upstox.")
 
