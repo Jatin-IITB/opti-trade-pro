@@ -23,6 +23,7 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -30,6 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from .capture_service import CaptureReport
 
@@ -171,11 +174,13 @@ class CaptureScheduler:
         config: ScheduleConfig,
         clock: Callable[[], float] = time.time,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        on_capture: Callable[[CaptureReport], Awaitable[None]] | None = None,
     ) -> None:
         self._capture_fn = capture_fn
         self._config = config
         self._clock = clock
         self._sleeper = sleeper
+        self._on_capture = on_capture
         self._stop_event = asyncio.Event()
         self._running = False
         self._last_run_ts: float | None = None
@@ -237,6 +242,11 @@ class CaptureScheduler:
             self._last_error = None
             detail = f"stored {report.n_clean}/{report.n_raw} clean quotes at {report.path}"
             self.history.append((now, True, detail))
+            if self._on_capture is not None:
+                try:
+                    await self._on_capture(report)
+                except Exception as cb_exc:
+                    logger.warning("on_capture callback failed: %s", cb_exc)
 
     async def _sleep_or_stop(self, delay: float) -> None:
         """Wait ``delay`` seconds via the injected sleeper, waking early on stop()."""

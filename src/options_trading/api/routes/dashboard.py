@@ -3,11 +3,13 @@
 Production-grade dashboard routes for options trading platform.
 """
 
+import dataclasses
 import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
 from ...models.dashboard import (
@@ -145,6 +147,18 @@ async def websocket_endpoint(
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
+            elif message.get("type") == "request_snapshot":
+                pipeline = getattr(websocket.app.state, "live_pipeline", None)
+                if pipeline is not None:
+                    snapshot = pipeline.get_latest_snapshot()
+                    if snapshot is not None:
+                        await websocket.send_json(
+                            {
+                                "type": "dashboard_update",
+                                "data": dataclasses.asdict(snapshot),
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
             elif message.get("type") == "ping":
                 await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
     except WebSocketDisconnect:
@@ -187,6 +201,18 @@ async def update_dashboard_config(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Dashboard configuration update failed",
         )
+
+
+@router.get("/live/snapshot")
+async def get_live_snapshot(request: Request) -> Any:
+    """Latest computed analytics snapshot for REST polling fallback."""
+    pipeline = getattr(request.app.state, "live_pipeline", None)
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Live pipeline not initialized")
+    snapshot = pipeline.get_latest_snapshot()
+    if snapshot is None:
+        return JSONResponse(status_code=204, content=None)
+    return dataclasses.asdict(snapshot)
 
 
 @router.get("/health")
