@@ -310,9 +310,19 @@ export function ConnectorsPanel() {
   const configured = connectors.filter((c) => c.status === "connected");
   const available = connectors.filter((c) => c.status !== "connected");
 
-  const handleConnect = (broker: BrokerConnector) => {
-    if (broker.authUrl) {
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  const handleConnect = async (broker: BrokerConnector) => {
+    if (!broker.authUrl) return;
+    setConnectError(null);
+    try {
+      const resp = await fetch("/api/v1/auth/status");
+      if (!resp.ok) throw new Error();
       window.location.href = broker.authUrl;
+    } catch {
+      setConnectError(
+        "Backend is not running. Start the server (uvicorn) before connecting.",
+      );
     }
   };
 
@@ -352,6 +362,13 @@ export function ConnectorsPanel() {
           Refresh
         </button>
       </div>
+
+      {connectError && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-900/20 border border-red-800/30 text-red-400 text-sm">
+          <AlertCircle size={16} className="shrink-0" />
+          {connectError}
+        </div>
+      )}
 
       {configured.length > 0 && (
         <div>

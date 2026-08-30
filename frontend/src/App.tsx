@@ -13,6 +13,8 @@ import {
   Target,
   Briefcase,
   Plug,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
@@ -67,22 +69,58 @@ class ErrorBoundary extends Component<
   }
 }
 
-const TABS = [
-  { id: "surface", label: "Vol Surface", icon: Layers },
-  { id: "essvi", label: "eSSVI Fit", icon: Target },
-  { id: "greeks", label: "Greeks Book", icon: BarChart3 },
-  { id: "scenarios", label: "Scenarios", icon: Grid3x3 },
-  { id: "pnl", label: "P&L Explain", icon: TrendingUp },
-  { id: "higher", label: "Higher-Order", icon: Zap },
-  { id: "chain", label: "Option Chain", icon: Table },
-  { id: "backtest", label: "Backtest", icon: LineChart },
-  { id: "vrp", label: "VRP Signal", icon: Activity },
-  { id: "risk", label: "Risk", icon: Shield },
-  { id: "portfolio", label: "Portfolio", icon: Briefcase },
-  { id: "connectors", label: "Connectors", icon: Plug },
-] as const;
+interface NavItem {
+  id: string;
+  label: string;
+  icon: typeof Layers;
+}
 
-type TabId = (typeof TABS)[number]["id"];
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Volatility",
+    items: [
+      { id: "surface", label: "Vol Surface", icon: Layers },
+      { id: "essvi", label: "eSSVI Fit", icon: Target },
+      { id: "chain", label: "Option Chain", icon: Table },
+    ],
+  },
+  {
+    label: "Greeks & Risk",
+    items: [
+      { id: "greeks", label: "Greeks Book", icon: BarChart3 },
+      { id: "higher", label: "Higher-Order", icon: Zap },
+      { id: "risk", label: "Risk", icon: Shield },
+    ],
+  },
+  {
+    label: "P&L & Scenarios",
+    items: [
+      { id: "pnl", label: "P&L Explain", icon: TrendingUp },
+      { id: "scenarios", label: "Scenarios", icon: Grid3x3 },
+    ],
+  },
+  {
+    label: "Strategy",
+    items: [
+      { id: "backtest", label: "Backtest", icon: LineChart },
+      { id: "vrp", label: "VRP Signal", icon: Activity },
+    ],
+  },
+  {
+    label: "Portfolio",
+    items: [
+      { id: "portfolio", label: "Positions", icon: Briefcase },
+      { id: "connectors", label: "Connectors", icon: Plug },
+    ],
+  },
+];
+
+type TabId = string;
 
 const STATUS_STYLE: Record<string, { dot: string; label: string; bg: string }> =
   {
@@ -116,6 +154,51 @@ function timeSince(ts: number | null): string {
   return `${Math.floor(sec / 60)}m ago`;
 }
 
+function SidebarGroup({
+  group,
+  activeTab,
+  onSelect,
+  defaultOpen,
+}: {
+  group: NavGroup;
+  activeTab: TabId;
+  onSelect: (id: TabId) => void;
+  defaultOpen: boolean;
+}) {
+  const hasActive = group.items.some((i) => i.id === activeTab);
+  const [open, setOpen] = useState(defaultOpen || hasActive);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-400 transition-colors"
+      >
+        {group.label}
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      {open && (
+        <div className="space-y-0.5 pb-2">
+          {group.items.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => onSelect(id)}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-lg transition-colors ${
+                activeTab === id
+                  ? "bg-blue-600/15 text-blue-400 font-medium"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              }`}
+            >
+              <Icon size={15} className="shrink-0" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("surface");
   const live = useLiveData();
@@ -125,9 +208,9 @@ export default function App() {
   const badge = STATUS_STYLE[live.status] ?? STATUS_STYLE.disconnected;
 
   return (
-    <div className="min-h-screen bg-slate-900">
-      <header className="border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between">
+    <div className="h-screen flex flex-col bg-slate-900">
+      <header className="border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm shrink-0 z-50">
+        <div className="px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div
               className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-teal-400 flex items-center justify-center text-white font-bold text-sm"
@@ -137,10 +220,12 @@ export default function App() {
               OT
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-slate-100">
+              <h1 className="text-base font-semibold text-slate-100">
                 OptiTrade Pro
               </h1>
-              <p className="text-xs text-slate-400">Analytics Dashboard</p>
+              <p className="text-[11px] text-slate-500">
+                Volatility Analytics Desk
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-400">
@@ -165,85 +250,74 @@ export default function App() {
         </div>
       </header>
 
-      <nav
-        className="border-b border-slate-700 bg-slate-900/60"
-        aria-label="Dashboard panels"
-      >
-        <div className="max-w-[1400px] mx-auto px-6 flex gap-1 overflow-x-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              aria-selected={activeTab === id}
-              aria-label={label}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === id
-                  ? "border-blue-500 text-blue-400"
-                  : "border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-600"
-              }`}
-            >
-              <Icon size={16} aria-hidden="true" />
-              {label}
-            </button>
+      <div className="flex flex-1 overflow-hidden">
+        <aside className="w-52 shrink-0 border-r border-slate-700/50 bg-slate-900 overflow-y-auto py-3 px-2 space-y-1">
+          {NAV_GROUPS.map((group, i) => (
+            <SidebarGroup
+              key={group.label}
+              group={group}
+              activeTab={activeTab}
+              onSelect={setActiveTab}
+              defaultOpen={i === 0}
+            />
           ))}
-        </div>
-      </nav>
-
-      <main className="max-w-[1400px] mx-auto px-6 py-6">
-        <ErrorBoundary>
-          {activeTab === "surface" && (
-            <VolSurface data={data.volSurface} />
-          )}
-          {activeTab === "essvi" && (
-            <EssviCalibration data={data.essviCalibration} />
-          )}
-          {activeTab === "greeks" && (
-            <GreeksBook data={data.greeksComparison} />
-          )}
-          {activeTab === "scenarios" && (
-            <ScenarioHeatmap data={data.scenarioGrid} />
-          )}
-          {activeTab === "pnl" && <PnlWaterfall data={data.pnlExplain} />}
-          {activeTab === "higher" && (
-            <HigherOrderGreeks data={data.higherOrderGreeks} />
-          )}
-          {activeTab === "chain" && (
-            <OptionChain data={data.optionChain} />
-          )}
-          {activeTab === "backtest" && (
-            <BacktestEquity data={data.backtestEquity} />
-          )}
-          {activeTab === "vrp" && <VrpSignal data={data.vrpSignal} />}
-          {activeTab === "risk" && (
-            <RiskDashboard data={data.riskDashboard} />
-          )}
-          {activeTab === "portfolio" && (
-            <div className="space-y-6">
-              <PortfolioSummaryPanel
-                summary={portfolio.summary}
-                syncStatus={portfolio.syncStatus}
-                loading={portfolio.loading}
-                error={portfolio.error}
-                onRefresh={portfolio.refresh}
-              />
-              {portfolio.summary?.synced && (
-                <PositionSignals signals={portfolio.signals} />
-              )}
+          <div className="pt-3 px-3 border-t border-slate-800 mt-3">
+            <div className="text-[10px] text-slate-600 leading-relaxed">
+              4 Greeks methods &middot; 26 ADRs
+              <br />
+              fail-closed risk engine
             </div>
-          )}
-          {activeTab === "connectors" && <ConnectorsPanel />}
-        </ErrorBoundary>
-      </main>
+          </div>
+        </aside>
 
-      <footer className="border-t border-slate-800 py-4 mt-auto">
-        <div className="max-w-[1400px] mx-auto px-6 flex justify-between text-xs text-slate-500">
-          <span>
-            4 Greeks methods cross-validated &middot; 26 ADRs &middot;
-            fail-closed risk engine
-          </span>
-          <span>OptiTrade Pro v3.0</span>
-        </div>
-      </footer>
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-[1200px] mx-auto px-6 py-6">
+            <ErrorBoundary>
+              {activeTab === "surface" && (
+                <VolSurface data={data.volSurface} />
+              )}
+              {activeTab === "essvi" && (
+                <EssviCalibration data={data.essviCalibration} />
+              )}
+              {activeTab === "greeks" && (
+                <GreeksBook data={data.greeksComparison} />
+              )}
+              {activeTab === "scenarios" && (
+                <ScenarioHeatmap data={data.scenarioGrid} />
+              )}
+              {activeTab === "pnl" && <PnlWaterfall data={data.pnlExplain} />}
+              {activeTab === "higher" && (
+                <HigherOrderGreeks data={data.higherOrderGreeks} />
+              )}
+              {activeTab === "chain" && (
+                <OptionChain data={data.optionChain} />
+              )}
+              {activeTab === "backtest" && (
+                <BacktestEquity data={data.backtestEquity} />
+              )}
+              {activeTab === "vrp" && <VrpSignal data={data.vrpSignal} />}
+              {activeTab === "risk" && (
+                <RiskDashboard data={data.riskDashboard} />
+              )}
+              {activeTab === "portfolio" && (
+                <div className="space-y-6">
+                  <PortfolioSummaryPanel
+                    summary={portfolio.summary}
+                    syncStatus={portfolio.syncStatus}
+                    loading={portfolio.loading}
+                    error={portfolio.error}
+                    onRefresh={portfolio.refresh}
+                  />
+                  {portfolio.summary?.synced && (
+                    <PositionSignals signals={portfolio.signals} />
+                  )}
+                </div>
+              )}
+              {activeTab === "connectors" && <ConnectorsPanel />}
+            </ErrorBoundary>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
