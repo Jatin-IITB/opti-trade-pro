@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from optitrade.core.types import MarketSnapshot, OptionQuote, OptionType
+from optitrade.core.types import Greeks, MarketSnapshot, OptionQuote, OptionType, Portfolio
 from optitrade.data.capture import to_market_snapshot
 from optitrade.data.models import RawChain
 from optitrade.pricing import bs_greeks_at
@@ -58,7 +58,9 @@ class LiveAnalytics:
     def __init__(self, config: LiveAnalyticsConfig = LiveAnalyticsConfig()) -> None:
         self._config = config
 
-    def build_from_raw_chain(self, chain: RawChain) -> LiveDashboardPayload:
+    def build_from_raw_chain(
+        self, chain: RawChain, portfolio: Portfolio | None = None
+    ) -> LiveDashboardPayload:
         """Run all builders and return a payload with partial results on failure."""
         snapshot = to_market_snapshot(chain)
         chain_in = raw_chain_to_chain_in(chain)
@@ -72,9 +74,9 @@ class LiveAnalytics:
         for name, builder in [
             ("vol_surface", lambda: self._build_vol_surface(snapshot)),
             ("option_chain", lambda: self._build_option_chain(chain, snapshot)),
-            ("greeks_book", lambda: self._build_greeks_book(snapshot)),
+            ("greeks_book", lambda: self._build_greeks_book(snapshot, portfolio)),
             ("essvi_calibration", lambda: self._build_essvi_calibration(snapshot)),
-            ("risk_dashboard", lambda: self._build_risk_dashboard(snapshot)),
+            ("risk_dashboard", lambda: self._build_risk_dashboard(snapshot, portfolio)),
         ]:
             try:
                 setattr(payload, name, builder())
@@ -215,11 +217,17 @@ class LiveAnalytics:
             "chain": rows,
         }
 
-    def _build_greeks_book(self, snapshot: MarketSnapshot) -> dict[str, Any]:
+    def _build_greeks_book(
+        self, snapshot: MarketSnapshot, portfolio: Portfolio | None = None
+    ) -> dict[str, Any]:
         """Build ``{spot, rate, positions}`` matching GreeksBook.tsx.
 
-        Generates positions from near-ATM quotes to show a representative view.
+        When a real portfolio is available, computes Greeks for actual positions.
+        Otherwise falls back to near-ATM quotes for a representative view.
         """
+        if portfolio and portfolio.positions:
+            return self._greeks_book_from_portfolio(snapshot, portfolio)
+
         expiries = sorted({q.expiry for q in snapshot.quotes})
         if not expiries:
             return {"spot": snapshot.spot, "rate": snapshot.rate, "positions": []}
@@ -260,6 +268,7 @@ class LiveAnalytics:
                     "vol": iv,
                     "optionType": q.option_type.value,
                     "price": q.mid,
+                    "quantity": 1,
                     "greeks": {
                         "delta": g.delta,
                         "gamma": g.gamma,
@@ -268,6 +277,61 @@ class LiveAnalytics:
                         "rho": g.rho,
                         "vanna": g.vanna,
                         "volga": g.volga,
+                    },
+                }
+            )
+
+        return {
+            "spot": snapshot.spot,
+            "rate": snapshot.rate,
+            "positions": positions,
+        }
+
+    def _greeks_book_from_portfolio(
+        self, snapshot: MarketSnapshot, portfolio: Portfolio
+    ) -> dict[str, Any]:
+        positions: list[dict[str, Any]] = []
+        for pos in portfolio.positions:
+            c = pos.contract
+            if c.expiry <= 0:
+                continue
+            iv = self._safe_iv(
+                pos.entry_price,
+                snapshot.spot,
+                c.strike,
+                c.expiry,
+                snapshot.rate,
+                c.option_type,
+                snapshot.dividend_yield,
+            )
+            if iv <= 0:
+                iv = 0.20
+            g = bs_greeks_at(
+                snapshot.spot,
+                c.strike,
+                c.expiry,
+                snapshot.rate,
+                iv,
+                c.option_type,
+                snapshot.dividend_yield,
+            )
+            scaled = g.scaled(pos.quantity)
+            positions.append(
+                {
+                    "strike": c.strike,
+                    "expiry": c.expiry,
+                    "vol": iv,
+                    "optionType": c.option_type.value,
+                    "price": pos.entry_price,
+                    "quantity": pos.quantity,
+                    "greeks": {
+                        "delta": scaled.delta,
+                        "gamma": scaled.gamma,
+                        "vega": scaled.vega,
+                        "theta": scaled.theta,
+                        "rho": scaled.rho,
+                        "vanna": scaled.vanna,
+                        "volga": scaled.volga,
                     },
                 }
             )
@@ -333,10 +397,13 @@ class LiveAnalytics:
             "durrlemanViolations": durrleman_violations,
         }
 
-    def _build_risk_dashboard(self, snapshot: MarketSnapshot) -> dict[str, Any]:
+    def _build_risk_dashboard(
+        self, snapshot: MarketSnapshot, portfolio: Portfolio | None = None
+    ) -> dict[str, Any]:
         """Build ``{limits, current, utilizationHistory, verdicts}`` for RiskDashboard.tsx.
 
-        Without active positions, shows zero utilization against default limits.
+        When a real portfolio is available, computes aggregate Greeks for
+        utilization display. Otherwise shows zero utilization.
         """
         limits = {
             "delta": 500.0,
@@ -344,11 +411,45 @@ class LiveAnalytics:
             "vega": 10000.0,
             "drawdown": 0.05,
         }
+
+        agg = Greeks()
+        drawdown = 0.0
+        if portfolio and portfolio.positions:
+            for pos in portfolio.positions:
+                c = pos.contract
+                if c.expiry <= 0:
+                    continue
+                iv = self._safe_iv(
+                    pos.entry_price,
+                    snapshot.spot,
+                    c.strike,
+                    c.expiry,
+                    snapshot.rate,
+                    c.option_type,
+                    snapshot.dividend_yield,
+                )
+                if iv <= 0:
+                    iv = 0.20
+                try:
+                    g = bs_greeks_at(
+                        snapshot.spot,
+                        c.strike,
+                        c.expiry,
+                        snapshot.rate,
+                        iv,
+                        c.option_type,
+                        snapshot.dividend_yield,
+                    )
+                    agg = agg + g.scaled(pos.quantity)
+                except Exception:
+                    pass
+            drawdown = portfolio.drawdown
+
         current = {
-            "delta": 0.0,
-            "gamma": 0.0,
-            "vega": 0.0,
-            "drawdown": 0.0,
+            "delta": agg.delta,
+            "gamma": agg.gamma,
+            "vega": agg.vega,
+            "drawdown": drawdown,
         }
         return {
             "limits": limits,

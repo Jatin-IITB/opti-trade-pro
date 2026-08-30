@@ -22,12 +22,15 @@ from .api.routes.backtesting import router as backtesting_router
 from .api.routes.capture import router as capture_router
 from .api.routes.dashboard import router as dashboard_router
 from .api.routes.market_data import router as market_data_router
+from .api.routes.portfolio import router as portfolio_router
 from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
 from .services.auth_service import AuthService
 from .services.dashboard_service import DashboardService
 from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
+from .services.portfolio_client import UpstoxPortfolioClient
+from .services.portfolio_sync_service import PortfolioSyncConfig, PortfolioSyncService
 from .services.strategy_service import StrategyService
 from .services.websocket_manager import WebSocketManager
 from .utils.cache import AsyncCache
@@ -50,12 +53,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("🔌 Initializing WebSocket manager...")
     app.state.websocket_manager = websocket_manager
-
-    logger.info("📡 Initializing live pipeline service...")
-    app.state.live_pipeline = LivePipelineService(
-        ws_manager=websocket_manager,
-        config=LivePipelineConfig(),
-    )
 
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
@@ -84,13 +81,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_service = MarketDataService(market_data_manager=market_data_manager)
         logger.info("📊 MarketDataService initialized")
 
-        app.state.dashboard_service = DashboardService(market_data_manager=market_data_manager)
-        logger.info("📊 DashboardService initialized")
-
         app.state.strategy_service = StrategyService(
             market_data_service=app.state.market_data_service
         )
         logger.info("📈 StrategyService initialized")
+
+        portfolio_client = UpstoxPortfolioClient(access_token=access_token)
+        portfolio_sync = PortfolioSyncService(
+            client=portfolio_client,
+            ws_manager=websocket_manager,
+            config=PortfolioSyncConfig(
+                sync_interval_seconds=settings.portfolio_sync_interval_seconds,
+            ),
+        )
+        app.state.portfolio_sync = portfolio_sync
+        logger.info("📋 PortfolioSyncService initialized")
+
+        app.state.dashboard_service = DashboardService(
+            market_data_manager=market_data_manager,
+            portfolio_sync=portfolio_sync,
+        )
+        logger.info("📊 DashboardService initialized")
+
+        logger.info("📡 Initializing live pipeline service...")
+        app.state.live_pipeline = LivePipelineService(
+            ws_manager=websocket_manager,
+            config=LivePipelineConfig(),
+            portfolio_sync=portfolio_sync,
+        )
 
     except Exception as e:
         logger.warning(f"⚠️ Core services initialization failed: {e}")
@@ -100,6 +118,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_service = None
         app.state.dashboard_service = None
         app.state.strategy_service = None
+        app.state.portfolio_sync = None
+        app.state.live_pipeline = LivePipelineService(
+            ws_manager=websocket_manager,
+            config=LivePipelineConfig(),
+        )
 
     yield
 
@@ -174,6 +197,7 @@ def create_app() -> FastAPI:
     app.include_router(backtesting_router, prefix="/api/v1")
     app.include_router(analytics_router, prefix="/api/v1")
     app.include_router(capture_router, prefix="/api/v1")
+    app.include_router(portfolio_router, prefix="/api/v1")
 
     # Exception handlers
     @app.exception_handler(OptionsTradinError)
