@@ -6,9 +6,11 @@ Fixed user ID handling and token storage issues.
 """
 
 import logging
+import ssl
 import uuid
 
 import httpx
+import truststore
 
 from ..config.settings import get_settings
 from ..models.auth import (
@@ -24,6 +26,12 @@ from ..utils.exceptions import AuthError, TokenRefreshError
 from ..utils.security import SecureStorage
 
 logger = logging.getLogger(__name__)
+
+
+def _system_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context that trusts the OS certificate store (handles corporate proxies)."""
+    ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    return ctx
 
 
 class AuthService:
@@ -59,6 +67,7 @@ class AuthService:
         """Async context manager entry."""
         self._http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
+            verify=_system_ssl_context(),
             headers={
                 "Accept": "application/json",
                 "Api-Version": "2.0",

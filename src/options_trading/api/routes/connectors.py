@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ...services.auth_service import _system_ssl_context
 from ...services.connector_store import BROKER_SCHEMAS, ConnectorStore
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ async def _test_upstox(config: dict[str, str]) -> TestResult:
         return TestResult(success=False, message="API key or secret is empty.")
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, verify=_system_ssl_context()) as client:
             resp = await client.post(
                 "https://api.upstox.com/v2/login/authorization/token",
                 data={
