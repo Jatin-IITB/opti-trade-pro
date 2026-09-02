@@ -1,9 +1,9 @@
 # api/contracts.py
 import pandas as pd
-import requests
 
 from ...config.settings import settings
 from ...utils.exceptions import APIError, DataQualityError
+from ...utils.http import get_session
 
 url = settings.upstox_expired_contracts_url
 
@@ -16,7 +16,7 @@ def fetch_expired_option_contracts_df(
         "Authorization": f"Bearer {access_token}",
     }
     params = {"instrument_key": instrument_key, "expiry_date": expiry_date}
-    resp = requests.get(url, headers=headers, params=params)
+    resp = get_session().get(url, headers=headers, params=params)
     if resp.status_code != 200:
         raise APIError(f"Contracts HTTP {resp.status_code}: {resp.text}")
     payload = resp.json()

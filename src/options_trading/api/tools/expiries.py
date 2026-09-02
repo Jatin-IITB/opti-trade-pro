@@ -1,10 +1,9 @@
 # api/expiries.py
 
 
-import requests
-
 from ...config.settings import settings
 from ...utils.exceptions import APIError
+from ...utils.http import get_session
 
 url = settings.upstox_expired_expiries_url
 _EXPIRY_CACHE = {}
@@ -19,7 +18,7 @@ def get_expiries(instrument_key: str, access_token: str) -> list[str]:
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
-    resp = requests.get(url, headers=headers, params={"instrument_key": instrument_key})
+    resp = get_session().get(url, headers=headers, params={"instrument_key": instrument_key})
     payload = resp.json()
     if payload.get("status") != "success":
         raise APIError(f"Expiries API failure: {payload}")
