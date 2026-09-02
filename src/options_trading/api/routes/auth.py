@@ -1,9 +1,11 @@
 # src/options_trading/api/routes/auth.py
 """FastAPI routes for authentication endpoints. Fixed OAuth2 flow with proper user ID handling and error fixes."""
 
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta
+from html import escape as html_escape
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -28,6 +30,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 _OAUTH_STATE_TTL = 300
+_DEFAULT_RETURN_URL = "/dashboard"
+
+
+def safe_return_url(raw: str | None) -> str:
+    """Reduce a caller-supplied ``return_url`` to a same-origin relative path.
+
+    ``return_url`` is an unauthenticated query parameter that ends up in the
+    callback's HTML. Allow-list rather than escape: only a single-slash
+    absolute path is accepted.
+
+    Rejected forms and why:
+      - ``//evil.com/x``      protocol-relative; a browser treats it as a host
+      - ``https://evil.com``  absolute, off-origin
+      - ``javascript:...``    scheme injection
+      - ``';fetch(...)//``    breaks out of the JS string literal it is
+                              interpolated into, executing attacker code on the
+                              app origin immediately after login establishes a
+                              session against a live broker connection
+      - anything with a control character, CR/LF, quote, backslash or ``<``
+    """
+    if not raw:
+        return _DEFAULT_RETURN_URL
+    if not raw.startswith("/") or raw.startswith("//"):
+        return _DEFAULT_RETURN_URL
+    if any(ch in raw for ch in "'\"\\<>\r\n\t"):
+        return _DEFAULT_RETURN_URL
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        return _DEFAULT_RETURN_URL
+    return raw
 
 
 def _ensure_pending_store(app):
@@ -45,7 +76,11 @@ def _prune_states(app):
 
 @router.get("/login")
 @rate_limit_login
-async def initiate_login(request: Request, user_id: str | None = "default") -> RedirectResponse:
+async def initiate_login(
+    request: Request,
+    user_id: str | None = "default",
+    return_url: str | None = None,
+) -> RedirectResponse:
     """Initiate OAuth2 login flow."""
     settings = get_settings()
     _ensure_pending_store(request.app)
@@ -57,6 +92,9 @@ async def initiate_login(request: Request, user_id: str | None = "default") -> R
     request.app.state.pending_oauth_states[state_token] = {
         "user_id": user_id,
         "expires_at": expires_at,
+        # Sanitised on the way in as well as on the way out: storing it
+        # server-side does not make it trusted.
+        "return_url": safe_return_url(return_url),
     }
     logger.debug(
         "Stored server-side oauth state for user=%s token=%s (expires %s)",
@@ -132,6 +170,7 @@ async def oauth_callback(
     _ensure_pending_store(request.app)
     _prune_states(request.app)
     stored = request.app.state.pending_oauth_states.pop(state_token, None)
+    return_url = stored.get("return_url") if stored else None
     valid_state = False
     if stored and stored.get("user_id") == user_id_part:
         logger.debug("State token validated via server-side store for user=%s", user_id_part)
@@ -180,13 +219,19 @@ async def oauth_callback(
             except Exception as e:
                 logger.warning("Service init after auth failed: %s", e)
 
-            html = f"""
-            <p>User ID: <b>{actual_user_id}</b></p>
+            # Re-sanitise at render time, and escape both interpolations:
+            # json.dumps for the JS string literal, html.escape for the href.
+            redirect_to = safe_return_url(return_url)
+            js_target = json.dumps(redirect_to)
+            href_target = html_escape(redirect_to, quote=True)
+            safe_user = html_escape(str(actual_user_id), quote=True)
+            body = f"""
+            <p>User ID: <b>{safe_user}</b></p>
             <p>Redirecting you to the dashboard...</p>
-            <script>setTimeout(() => window.location.href = '/dashboard', 800);</script>
-            <p>If nothing happens, <a href="/dashboard">click here</a>.</p>
+            <script>setTimeout(function () {{ window.location.href = {js_target}; }}, 800);</script>
+            <p>If nothing happens, <a href="{href_target}">click here</a>.</p>
             """
-            response = HTMLResponse(content=html, status_code=status.HTTP_200_OK)
+            response = HTMLResponse(content=body, status_code=status.HTTP_200_OK)
             response.delete_cookie("oauth_state", path="/")
             return response
     except AuthError as e:
