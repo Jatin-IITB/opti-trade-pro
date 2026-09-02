@@ -276,6 +276,15 @@ class WebSocketManager:
         }
         return await self.broadcast_update(message)
 
+    async def send_portfolio_update(self, payload: dict[str, Any]) -> int:
+        """Broadcast a portfolio sync update to all connected clients."""
+        message = {
+            "type": "portfolio_update",
+            "data": payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+        return await self.broadcast_update(message)
+
     async def send_vol_surface_update(self, underlying: str, data: dict[str, Any]) -> int:
         """Broadcast a vol-surface update to subscribers of ``underlying``."""
         message = {
@@ -331,7 +340,7 @@ class WebSocketManager:
                 # Clean up inactive connections
                 for client_id in inactive_clients:
                     logger.info(f"Cleaning up inactive connection: {client_id}")
-                    self.disconnect(self.connections[client_id].websocket, client_id)
+                    await self.disconnect(self.connections[client_id].websocket, client_id)
 
                 # Log stats periodically
                 if self.connections:

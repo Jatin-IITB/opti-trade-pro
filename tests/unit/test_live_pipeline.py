@@ -1,10 +1,12 @@
 """Tests for the live pipeline orchestration service."""
 
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from options_trading.services.capture_service import CaptureReport
+from options_trading.services.live_analytics import LiveDashboardPayload
 from options_trading.services.live_pipeline import LivePipelineConfig, LivePipelineService
 from optitrade.data.capture import SyntheticSource
 
@@ -88,3 +90,62 @@ class TestLivePipelineService:
     def test_cache_chain(self, pipeline, chain):
         pipeline.cache_chain(chain)
         assert pipeline._last_chain is chain
+
+    def test_latest_spot_is_none_before_first_capture(self, pipeline):
+        assert pipeline.get_latest_spot() is None
+
+    @pytest.mark.asyncio
+    async def test_latest_spot_after_capture(self, pipeline, report, chain):
+        pipeline.cache_chain(chain)
+        await pipeline.on_capture(report)
+        assert pipeline.get_latest_spot() == chain.spot
+
+
+class TestWireFormat:
+    """The push and pull paths must serialize identically.
+
+    Regression guard: the snapshot paths used ``dataclasses.asdict``, which
+    emits snake_case keys. The frontend only reads camelCase, so every
+    ``request_snapshot`` reply and every ``GET /dashboard/live/snapshot`` was
+    silently discarded while appearing to succeed.
+    """
+
+    EXPECTED_KEYS: ClassVar[set[str]] = {
+        "volSurface",
+        "optionChain",
+        "greeksComparison",
+        "essviCalibration",
+        "riskDashboard",
+        "scenarioGrid",
+        "higherOrderGreeks",
+        "timestamp",
+        "underlying",
+        "spot",
+    }
+
+    def test_wire_dict_uses_camel_case(self):
+        payload = LiveDashboardPayload(
+            vol_surface={"a": 1},
+            option_chain={"b": 2},
+            greeks_book={"c": 3},
+            essvi_calibration={"d": 4},
+            risk_dashboard={"e": 5},
+            scenario_grid={"f": 6},
+            higher_order_greeks={"g": 7},
+            timestamp=1.0,
+            underlying="NIFTY",
+            spot=24500.0,
+        )
+        wire = payload.to_wire_dict()
+        assert set(wire) == self.EXPECTED_KEYS
+        assert not any("_" in k for k in wire)
+        assert wire["greeksComparison"] == {"c": 3}
+        assert wire["spot"] == 24500.0
+
+    @pytest.mark.asyncio
+    async def test_broadcast_and_snapshot_agree(self, pipeline, report, chain, ws_manager):
+        pipeline.cache_chain(chain)
+        await pipeline.on_capture(report)
+        broadcast = ws_manager.send_dashboard_update.call_args[0][0]
+        snapshot = pipeline.get_latest_snapshot().to_wire_dict()
+        assert set(broadcast) == set(snapshot) == self.EXPECTED_KEYS

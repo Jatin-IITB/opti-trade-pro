@@ -16,8 +16,10 @@ Design notes
 - An unattended service never dies on one bad capture: each failure is
   recorded (counters, ``history``) and the loop continues. This is the
   survive-and-log complement to the fail-closed rule for risk checks.
-- Nothing here auto-starts. Starting a schedule needs a live broker token and
-  a chosen expiry — operator decisions, made via the capture routes.
+- ``before_capture`` runs on the event loop before each threaded capture, so
+  an async token refresh can happen while ``capture_fn`` stays synchronous.
+  An ``AuthError`` there sets ``auth_required`` rather than being buried in
+  the generic failure count: no amount of retrying fixes an expired token.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+from ..utils.exceptions import AuthError
 from .capture_service import CaptureReport
 
 # Capture outcomes kept for the status route: at the default 15-minute cadence
@@ -111,6 +114,10 @@ class SchedulerStatus:
     n_captures: int
     n_failures: int
     next_eligible_ts: float | None
+    #: True when captures are blocked on an expired/absent Upstox token. Only
+    #: an interactive re-login clears this, so it is reported separately from
+    #: ``n_failures`` — retrying cannot help and the user must be told.
+    auth_required: bool = False
 
 
 def is_market_open(ts: float, config: ScheduleConfig) -> bool:
@@ -175,18 +182,21 @@ class CaptureScheduler:
         clock: Callable[[], float] = time.time,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         on_capture: Callable[[CaptureReport], Awaitable[None]] | None = None,
+        before_capture: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._capture_fn = capture_fn
         self._config = config
         self._clock = clock
         self._sleeper = sleeper
         self._on_capture = on_capture
+        self._before_capture = before_capture
         self._stop_event = asyncio.Event()
         self._running = False
         self._last_run_ts: float | None = None
         self._last_error: str | None = None
         self._n_captures = 0
         self._n_failures = 0
+        self._auth_required = False
         #: (epoch, ok, detail) per capture attempt, newest last, for the status route.
         self.history: deque[tuple[float, bool, str]] = deque(maxlen=HISTORY_MAXLEN)
 
@@ -226,11 +236,30 @@ class CaptureScheduler:
             n_captures=self._n_captures,
             n_failures=self._n_failures,
             next_eligible_ts=self._next_eligible_ts(now),
+            auth_required=self._auth_required,
         )
 
     async def _capture_once(self, now: float) -> None:
         """One capture attempt in a worker thread; outcome recorded, never raised."""
         self._last_run_ts = now
+
+        if self._before_capture is not None:
+            try:
+                await self._before_capture()
+            except AuthError as exc:
+                # Distinct from a capture failure: only re-login clears it, so
+                # flag it for the UI instead of counting another silent retry.
+                self._auth_required = True
+                self._n_failures += 1
+                self._last_error = f"Authentication required: {exc}"
+                self.history.append((now, False, self._last_error))
+                return
+            except Exception as exc:
+                self._n_failures += 1
+                self._last_error = f"Pre-capture step failed: {type(exc).__name__}: {exc}"
+                self.history.append((now, False, self._last_error))
+                return
+
         try:
             report = await asyncio.to_thread(self._capture_fn)
         except Exception as exc:  # unattended loop: record and continue
@@ -240,6 +269,7 @@ class CaptureScheduler:
         else:
             self._n_captures += 1
             self._last_error = None
+            self._auth_required = False
             detail = f"stored {report.n_clean}/{report.n_raw} clean quotes at {report.path}"
             self.history.append((now, True, detail))
             if self._on_capture is not None:

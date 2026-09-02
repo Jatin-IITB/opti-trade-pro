@@ -11,10 +11,19 @@ import {
   Legend,
 } from "recharts";
 
+/**
+ * Nullable fields have no honest source yet and must not render as zero:
+ * `drawdown` needs an equity high-water mark, `utilizationHistory` needs a
+ * persisted time series, and `verdicts` needs the pre-trade engine to be
+ * reviewing real orders (this app is read-only). Zero would read as
+ * "no drawdown, no rejections" — a claim, not an absence.
+ */
 interface Props {
   data: {
     limits: Record<string, number>;
-    current: Record<string, number>;
+    current: Record<string, number> | null;
+    marginUtilization?: number | null;
+    drawdown?: number | null;
     utilizationHistory: {
       day: number;
       deltaUtil: number;
@@ -22,7 +31,10 @@ interface Props {
       vegaUtil: number;
       drawdownUtil: number;
     }[];
-    verdicts: Record<string, number>;
+    verdicts: Record<string, number> | null;
+    legsPriced?: number;
+    legsExcluded?: number;
+    hasBook?: boolean;
   };
 }
 
@@ -51,20 +63,25 @@ function utilColor(pct: number): string {
 }
 
 export function RiskDashboard({ data }: Props) {
+  const current = data.current;
   const gauges = [
     { key: "delta", label: "Delta", unit: "" },
     { key: "gamma", label: "Gamma", unit: "" },
     { key: "vega", label: "Vega", unit: "" },
-    { key: "drawdown", label: "Drawdown", unit: "%" },
-  ];
+  ].filter((g) => current && current[g.key] !== undefined);
 
-  const verdictData = Object.entries(data.verdicts).map(([name, count]) => ({
-    name,
-    count,
-    fill: VERDICT_COLORS[name] || "#64748b",
-  }));
+  const verdicts = data.verdicts;
+  const verdictData = verdicts
+    ? Object.entries(verdicts).map(([name, count]) => ({
+        name,
+        count,
+        fill: VERDICT_COLORS[name] || "#64748b",
+      }))
+    : [];
 
-  const totalVerdicts = Object.values(data.verdicts).reduce((s, v) => s + v, 0);
+  const totalVerdicts = verdicts
+    ? Object.values(verdicts).reduce((s, v) => s + v, 0)
+    : 0;
 
   return (
     <div className="space-y-4">
@@ -78,30 +95,51 @@ export function RiskDashboard({ data }: Props) {
             halt, concentration resize (ADR-008)
           </p>
         </div>
-        <div className="px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50">
-          <span className="text-xs text-emerald-400 font-mono">
-            Engine Active
+        <div
+          className={`px-3 py-1.5 rounded-lg border ${
+            data.hasBook
+              ? "bg-emerald-900/30 border-emerald-700/50"
+              : "bg-slate-800/60 border-slate-700"
+          }`}
+        >
+          <span
+            className={`text-xs font-mono ${
+              data.hasBook ? "text-emerald-400" : "text-slate-400"
+            }`}
+          >
+            {data.hasBook
+              ? `${data.legsPriced} legs priced`
+              : "No book synced"}
           </span>
         </div>
       </div>
 
+      {!current && (
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 text-center">
+          <div className="text-amber-400 text-sm mb-1">
+            No book exposure to report
+          </div>
+          <p className="text-slate-400 text-xs">
+            Limit utilisation is computed from your synced F&amp;O positions at
+            the live spot. Connect Upstox and let a capture cycle run.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-4 gap-3">
-        {gauges.map(({ key, label, unit }) => {
-          const current = data.current[key];
+        {current &&
+          gauges.map(({ key, label, unit }) => {
+          const currentValue = current[key];
           const limit = data.limits[key];
-          const pct = utilPercent(current, limit);
+          const pct = utilPercent(Math.abs(currentValue), limit);
           const displayCurrent =
-            key === "drawdown"
-              ? `${(current * 100).toFixed(1)}%`
-              : current < 0.1
-                ? current.toFixed(5)
-                : current.toLocaleString();
+            Math.abs(currentValue) < 0.1
+              ? currentValue.toFixed(5)
+              : currentValue.toLocaleString("en-IN", {
+                  maximumFractionDigits: 2,
+                });
           const displayLimit =
-            key === "drawdown"
-              ? `${(limit * 100).toFixed(0)}%`
-              : limit < 0.1
-                ? limit.toFixed(3)
-                : limit.toLocaleString();
+            limit < 0.1 ? limit.toFixed(3) : limit.toLocaleString("en-IN");
 
           return (
             <div
@@ -150,6 +188,14 @@ export function RiskDashboard({ data }: Props) {
           <div className="text-xs text-slate-500 mb-2">
             Utilization History (60d)
           </div>
+          {data.utilizationHistory.length === 0 ? (
+            <div className="h-[240px] flex items-center justify-center text-center px-6">
+              <p className="text-slate-500 text-xs">
+                No history recorded. Utilisation is computed live but not yet
+                persisted, so there is no series to plot.
+              </p>
+            </div>
+          ) : (
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={data.utilizationHistory}>
               <XAxis
@@ -212,12 +258,21 @@ export function RiskDashboard({ data }: Props) {
               />
             </LineChart>
           </ResponsiveContainer>
+          )}
         </div>
 
         <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-4">
           <div className="text-xs text-slate-500 mb-2">
-            Risk Verdicts ({totalVerdicts} total)
+            Risk Verdicts{verdicts ? ` (${totalVerdicts} total)` : ""}
           </div>
+          {!verdicts ? (
+            <div className="h-[240px] flex items-center justify-center text-center px-6">
+              <p className="text-slate-500 text-xs">
+                No verdicts to show. The pre-trade engine reviews orders, and
+                this app is read-only &mdash; it places none.
+              </p>
+            </div>
+          ) : (
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={verdictData} layout="vertical">
               <XAxis
@@ -251,14 +306,18 @@ export function RiskDashboard({ data }: Props) {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          )}
         </div>
       </div>
 
       <div className="bg-slate-800/20 rounded-lg border border-slate-700/30 p-4 text-xs text-slate-500">
-        <strong className="text-slate-400">Fail-closed guarantee:</strong> Any
-        exception inside a risk check converts to REJECT, never a pass-through.
-        Property-tested: no limit-breaching order is ever approved. Verdict
-        precedence: HALT &gt; REJECT &gt; RESIZE &gt; APPROVE (ADR-008).
+        <strong className="text-slate-400">About the risk engine:</strong> any
+        exception inside a check converts to REJECT, never a pass-through, and{" "}
+        <code>test_risk.py</code> property-tests that no limit-breaching order is
+        ever approved. Verdict precedence: HALT &gt; REJECT &gt; RESIZE &gt;
+        APPROVE (ADR-008). Exposure above is computed from your synced book;
+        drawdown, utilisation history and verdicts have no persisted source yet
+        and are reported as absent rather than zero.
       </div>
     </div>
   );

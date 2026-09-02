@@ -67,7 +67,22 @@ async def initialize_app_services(
             app.state.market_data_service = MarketDataService(
                 market_data_manager=market_data_manager
             )
-            app.state.dashboard_service = DashboardService(market_data_manager=market_data_manager)
+
+            # Late-bound lookups: the portfolio sync and live pipeline may be
+            # created after this runs, and both can be replaced on re-login.
+            def _current_book():
+                svc = getattr(app.state, "portfolio_sync", None)
+                return svc.get_book_context() if svc is not None else None
+
+            def _current_spot():
+                pipeline = getattr(app.state, "live_pipeline", None)
+                return pipeline.get_latest_spot() if pipeline is not None else None
+
+            app.state.dashboard_service = DashboardService(
+                market_data_manager=market_data_manager,
+                book_fn=_current_book,
+                spot_fn=_current_spot,
+            )
 
             if StrategyService:
                 app.state.strategy_service = StrategyService(

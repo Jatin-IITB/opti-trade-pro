@@ -161,8 +161,12 @@ export function OptionChain({ data }: Props) {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
+        {/* Named for what these actually compute. The chain carries one
+            combined OI per strike, so a true put/call ratio and a true max-pain
+            strike (which minimises total writer payout) are not derivable from
+            it — labelling them as such would be wrong. */}
         <div className="bg-slate-800/30 rounded-lg border border-slate-700/50 p-3">
-          <div className="text-xs text-slate-500">Put/Call Ratio (by OI)</div>
+          <div className="text-xs text-slate-500">OI Above / Below Spot</div>
           <div className="text-lg font-mono text-slate-200 mt-1">
             {(
               data.chain.reduce((s, r) => s + (r.strike > data.spot ? r.oi : 0), 0) /
@@ -171,7 +175,7 @@ export function OptionChain({ data }: Props) {
           </div>
         </div>
         <div className="bg-slate-800/30 rounded-lg border border-slate-700/50 p-3">
-          <div className="text-xs text-slate-500">Max Pain Strike</div>
+          <div className="text-xs text-slate-500">Highest-OI Strike</div>
           <div className="text-lg font-mono text-slate-200 mt-1">
             {data.chain
               .reduce((max, r) => (r.oi > max.oi ? r : max))

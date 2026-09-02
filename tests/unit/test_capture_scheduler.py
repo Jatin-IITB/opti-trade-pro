@@ -15,6 +15,7 @@ import asyncio
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -23,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from options_trading.api import dependencies
 from options_trading.api.routes import capture as capture_routes
+from options_trading.services import capture_control
 from options_trading.services.capture_scheduler import (
     CaptureScheduler,
     ScheduleConfig,
@@ -31,6 +33,7 @@ from options_trading.services.capture_scheduler import (
     next_market_open,
 )
 from options_trading.services.capture_service import CaptureReport
+from options_trading.utils.exceptions import AuthError
 from optitrade.data import SnapshotStore
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -394,16 +397,27 @@ class TestScheduleRoutes:
 
         class RecordingStub(StubScheduler):
             def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                # start_schedule passes before_capture (the token refresh hook);
+                # the stub does not exercise it, so keep it off super().
+                self.before_capture = kwargs.pop("before_capture", None)
                 super().__init__(*args, **kwargs)
                 created.append(self)
 
-        monkeypatch.setattr(capture_routes, "CaptureScheduler", RecordingStub)
+        monkeypatch.setattr(capture_control, "CaptureScheduler", RecordingStub)
         return created
 
     @pytest.fixture
     def authed(self, app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
         app.dependency_overrides[capture_routes.get_access_token] = lambda: "sched-token"
-        monkeypatch.setattr(capture_routes.settings, "snapshot_store_path", str(tmp_path))
+        monkeypatch.setattr(capture_control.settings, "snapshot_store_path", str(tmp_path))
+        # The schedule resolves tokens through the app-wide provider rather
+        # than capturing the route's string, so the tests need one installed.
+        provider = MagicMock()
+        provider.cached = lambda: "sched-token"
+        provider.get = AsyncMock(return_value="sched-token")
+        # Providers are keyed by user; seed the registry get_token_provider reads.
+        app.state.token_providers = {"default": provider}
+        app.state.token_provider = provider
 
     async def test_start_status_stop_lifecycle(
         self, app, authed: None, stub_schedulers: list[StubScheduler]
@@ -463,21 +477,28 @@ class TestScheduleRoutes:
         recorded: dict = {}
 
         class FakeSource:
-            def __init__(self, access_token: str, instrument_key: str, expiry_date: str) -> None:
-                recorded["access_token"] = access_token
+            def __init__(self, token_fn, instrument_key: str, expiry_date: str) -> None:  # type: ignore[no-untyped-def]
+                recorded["token_fn"] = token_fn
                 recorded["instrument_key"] = instrument_key
                 recorded["expiry_date"] = expiry_date
+                self.n_fetches = 0
+
+            def fetch_chain(self, underlying: str):  # type: ignore[no-untyped-def]
+                self.n_fetches += 1
+                recorded["n_fetches"] = self.n_fetches
+                return object()  # opaque: only identity is asserted
 
         fake_report = _fake_report(1_000.0)
 
-        def fake_capture_and_store(source, store, underlying, config=None):  # type: ignore[no-untyped-def]
+        def fake_capture_and_store(source, store, underlying, config=None, chain=None):  # type: ignore[no-untyped-def]
             recorded["source"] = source
             recorded["store"] = store
             recorded["underlying"] = underlying
+            recorded["chain"] = chain
             return fake_report
 
-        monkeypatch.setattr(capture_routes, "UpstoxCaptureSource", FakeSource)
-        monkeypatch.setattr(capture_routes, "capture_and_store", fake_capture_and_store)
+        monkeypatch.setattr(capture_control, "UpstoxCaptureSource", FakeSource)
+        monkeypatch.setattr(capture_control, "capture_and_store", fake_capture_and_store)
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -488,7 +509,14 @@ class TestScheduleRoutes:
             # capture with the token, source params, and store from the route.
             report = stub_schedulers[0].capture_fn()
             assert report is fake_report
-            assert recorded["access_token"] == "sched-token"
+            # The source holds a token *callable*, not a frozen string, so a
+            # refresh between captures is picked up.
+            assert callable(recorded["token_fn"])
+            assert recorded["token_fn"]() == "sched-token"
+            # One broker fetch per cycle, reused for both the stored snapshot
+            # and the analytics — not one fetch each.
+            assert recorded["n_fetches"] == 1
+            assert recorded["chain"] is not None
             assert recorded["instrument_key"] == "NSE_INDEX|Nifty 50"
             assert recorded["expiry_date"] == EXPIRY_DATE
             assert isinstance(recorded["source"], FakeSource)
@@ -506,6 +534,7 @@ class TestScheduleRoutes:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(capture_routes.settings, "capture_interval_seconds", 600)
+        monkeypatch.setattr(capture_control.settings, "capture_interval_seconds", 600)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             start = await client.post("/api/v1/capture/schedule/start", json=START_BODY)
@@ -541,3 +570,91 @@ class TestScheduleRoutes:
     def test_stop_without_scheduler_is_409(self, app, client: TestClient) -> None:
         resp = client.post("/api/v1/capture/schedule/stop")
         assert resp.status_code == 409
+
+
+class TestBeforeCaptureHook:
+    """The token-refresh hook runs on the loop before the threaded capture.
+
+    ``capture_fn`` is synchronous (it wraps blocking broker I/O), so an async
+    token refresh cannot live inside it. ``before_capture`` is where it goes.
+    """
+
+    async def test_runs_before_each_capture(self) -> None:
+        calls: list[str] = []
+
+        async def before() -> None:
+            calls.append("before")
+
+        def capture() -> CaptureReport:
+            calls.append("capture")
+            return _fake_report(1_000.0)
+
+        scheduler = CaptureScheduler(
+            capture_fn=capture,
+            config=ScheduleConfig(interval_seconds=1),
+            before_capture=before,
+        )
+        await scheduler._capture_once(1_000.0)
+        assert calls == ["before", "capture"]
+
+    async def test_auth_error_flags_auth_required_and_skips_capture(self) -> None:
+        captured = False
+
+        async def before() -> None:
+            raise AuthError("token expired")
+
+        def capture() -> CaptureReport:
+            nonlocal captured
+            captured = True
+            return _fake_report(1_000.0)
+
+        scheduler = CaptureScheduler(
+            capture_fn=capture,
+            config=ScheduleConfig(interval_seconds=1),
+            before_capture=before,
+        )
+        await scheduler._capture_once(1_000.0)
+
+        status = scheduler.status()
+        assert status.auth_required is True
+        assert status.n_failures == 1
+        assert status.n_captures == 0
+        assert "Authentication required" in (status.last_error or "")
+        assert captured is False, "must not call the broker with a dead token"
+
+    async def test_transient_hook_error_does_not_flag_auth(self) -> None:
+        async def before() -> None:
+            raise RuntimeError("dns hiccup")
+
+        scheduler = CaptureScheduler(
+            capture_fn=lambda: _fake_report(1_000.0),
+            config=ScheduleConfig(interval_seconds=1),
+            before_capture=before,
+        )
+        await scheduler._capture_once(1_000.0)
+
+        status = scheduler.status()
+        assert status.auth_required is False
+        assert status.n_failures == 1
+
+    async def test_recovery_clears_auth_required(self) -> None:
+        state = {"fail": True}
+
+        async def before() -> None:
+            if state["fail"]:
+                raise AuthError("token expired")
+
+        scheduler = CaptureScheduler(
+            capture_fn=lambda: _fake_report(1_000.0),
+            config=ScheduleConfig(interval_seconds=1),
+            before_capture=before,
+        )
+        await scheduler._capture_once(1_000.0)
+        assert scheduler.status().auth_required is True
+
+        state["fail"] = False
+        await scheduler._capture_once(2_000.0)
+
+        status = scheduler.status()
+        assert status.auth_required is False
+        assert status.n_captures == 1

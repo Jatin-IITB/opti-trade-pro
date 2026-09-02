@@ -155,10 +155,35 @@ class Settings(BaseSettings):
         default=900,
         description="Default cadence for the unattended capture scheduler (seconds)",
     )
+    capture_autostart: bool = Field(
+        default=True,
+        description=(
+            "Start the capture schedule automatically once a valid Upstox token exists. "
+            "Without it there is no live analytics source and the dashboard shows demo data."
+        ),
+    )
+    capture_autostart_underlying: str = Field(
+        default="NIFTY",
+        description="Underlying the capture schedule auto-starts on",
+    )
+    capture_autostart_expiry_index: int = Field(
+        default=0,
+        ge=0,
+        description="Which expiry to auto-capture; 0 = nearest tradable expiry",
+    )
     # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------
     risk_free_rate: float = Field(default=0.0679)
+    # Book risk limits. These feed optitrade.risk.RiskLimits; they are config,
+    # never literals in a flow (CLAUDE.md rule 2). Delta/gamma/vega are in
+    # underlying units per the core Greeks conventions (vega per unit vol).
+    risk_max_abs_delta: float = Field(default=500.0, gt=0)
+    risk_max_abs_gamma: float = Field(default=50.0, gt=0)
+    risk_max_abs_vega: float = Field(default=10_000.0, gt=0)
+    risk_max_drawdown: float = Field(default=0.05, gt=0, le=1.0)
+    risk_max_concentration: float = Field(default=0.35, gt=0, le=1.0)
+    risk_margin_buffer: float = Field(default=1.25, ge=1.0)
     periods_per_year: int = Field(default=252)
     rv_window_1min: int = Field(default=390)  # ≈ 1.5 trading days
     rv_window_3min: int = Field(default=130)  # ≈ 1.5 trading days

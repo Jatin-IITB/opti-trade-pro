@@ -61,47 +61,25 @@ def _greeks_comparison() -> dict:
         ot = OptionType(p["type"])
         g = bs_greeks_at(SPOT, p["strike"], p["expiry"], RATE, p["vol"], ot, DIV)
         price = float(bs_price(SPOT, p["strike"], p["expiry"], RATE, p["vol"], ot, DIV))
-        results.append({
-            "strike": p["strike"],
-            "expiry": p["expiry"],
-            "vol": p["vol"],
-            "optionType": p["type"],
-            "price": round(price, 2),
-            "greeks": {
-                "delta": round(g.delta, 6),
-                "gamma": round(g.gamma, 8),
-                "vega": round(g.vega, 4),
-                "theta": round(g.theta, 4),
-                "rho": round(g.rho, 4),
-                "vanna": round(g.vanna, 6),
-                "volga": round(g.volga, 4),
-            },
-        })
+        results.append(
+            {
+                "strike": p["strike"],
+                "expiry": p["expiry"],
+                "vol": p["vol"],
+                "optionType": p["type"],
+                "price": round(price, 2),
+                "greeks": {
+                    "delta": round(g.delta, 6),
+                    "gamma": round(g.gamma, 8),
+                    "vega": round(g.vega, 4),
+                    "theta": round(g.theta, 4),
+                    "rho": round(g.rho, 4),
+                    "vanna": round(g.vanna, 6),
+                    "volga": round(g.volga, 4),
+                },
+            }
+        )
     return {"spot": SPOT, "rate": RATE, "positions": results}
-
-
-def _scenario_grid() -> dict:
-    spot_shifts = np.linspace(-0.10, 0.10, 21)
-    vol_shifts = np.linspace(-0.05, 0.05, 11)
-    strike, expiry, vol = 20000.0, 0.25, 0.20
-    base = float(bs_price(SPOT, strike, expiry, RATE, vol, OptionType.CALL, DIV))
-    pnl: list[list[float]] = []
-    for dv in vol_shifts:
-        row: list[float] = []
-        for ds in spot_shifts:
-            new_spot = SPOT * (1 + ds)
-            new_vol = vol + dv
-            p = float(bs_price(new_spot, strike, expiry, RATE, max(new_vol, 0.01), OptionType.CALL, DIV))
-            row.append(round(p - base, 2))
-        pnl.append(row)
-    return {
-        "spotShifts": [round(float(s) * 100, 1) for s in spot_shifts],
-        "volShifts": [round(float(v) * 100, 1) for v in vol_shifts],
-        "pnl": pnl,
-        "strike": strike,
-        "expiry": expiry,
-        "basePrice": round(base, 2),
-    }
 
 
 def _pnl_explain() -> dict:
@@ -138,19 +116,42 @@ def _higher_order_greeks() -> dict:
                 "volga": round(g.volga, 4),
             },
             "higherOrder": {k: round(v, 8) for k, v in ho.items()},
-            "params": {"spot": SPOT, "strike": 20000, "expiry": 0.25, "vol": 0.20, "rate": RATE, "div": DIV},
+            "params": {
+                "spot": SPOT,
+                "strike": 20000,
+                "expiry": 0.25,
+                "vol": 0.20,
+                "rate": RATE,
+                "div": DIV,
+            },
         }
     except ImportError:
         return {
             "standard": {
-                "delta": 0.567, "gamma": 0.000028, "vega": 2763.4,
-                "theta": -6975.1, "rho": 2519.6, "vanna": -0.069, "volga": 86.4,
+                "delta": 0.567,
+                "gamma": 0.000028,
+                "vega": 2763.4,
+                "theta": -6975.1,
+                "rho": 2519.6,
+                "vanna": -0.069,
+                "volga": 86.4,
             },
             "higherOrder": {
-                "charm": -0.063, "veta": -26.49, "speed": -0.00062,
-                "color": 0.029, "ultima": -26.74, "zomma": -0.137,
+                "charm": -0.063,
+                "veta": -26.49,
+                "speed": -0.00062,
+                "color": 0.029,
+                "ultima": -26.74,
+                "zomma": -0.137,
             },
-            "params": {"spot": SPOT, "strike": 20000, "expiry": 0.25, "vol": 0.20, "rate": RATE, "div": DIV},
+            "params": {
+                "spot": SPOT,
+                "strike": 20000,
+                "expiry": 0.25,
+                "vol": 0.20,
+                "rate": RATE,
+                "div": DIV,
+            },
         }
 
 
@@ -173,14 +174,16 @@ def _essvi_calibration() -> dict:
             market_vols.append(round(float(market), 6))
             fitted_vols.append(round(float(fitted), 6))
         theta = round(float((0.18 + 0.03 * np.sqrt(t)) ** 2 * t), 6)
-        result["expiries"].append({
-            "t": round(t, 4),
-            "strikes": [round(float(k), 1) for k in strikes],
-            "marketVols": market_vols,
-            "fittedVols": fitted_vols,
-            "theta": theta,
-            "rmse": round(float(np.std(np.array(market_vols) - np.array(fitted_vols))), 6),
-        })
+        result["expiries"].append(
+            {
+                "t": round(t, 4),
+                "strikes": [round(float(k), 1) for k in strikes],
+                "marketVols": market_vols,
+                "fittedVols": fitted_vols,
+                "theta": theta,
+                "rmse": round(float(np.std(np.array(market_vols) - np.array(fitted_vols))), 6),
+            }
+        )
     result["params"] = {"rho": -0.35, "eta": 1.82, "gamma": 0.42}
     result["durrlemanViolations"] = 0
     return result
@@ -210,13 +213,17 @@ def _backtest_equity() -> dict:
         s = i * fold_size
         e = min(s + fold_size, n_days)
         fold_rets = daily_returns[s:e]
-        folds.append({
-            "fold": i + 1,
-            "trainSharpe": round(float(rng.normal(1.5, 0.3)), 3),
-            "testSharpe": round(float(np.mean(fold_rets) / max(np.std(fold_rets), 1e-10) * np.sqrt(252)), 3),
-            "startDay": s,
-            "endDay": e,
-        })
+        folds.append(
+            {
+                "fold": i + 1,
+                "trainSharpe": round(float(rng.normal(1.5, 0.3)), 3),
+                "testSharpe": round(
+                    float(np.mean(fold_rets) / max(np.std(fold_rets), 1e-10) * np.sqrt(252)), 3
+                ),
+                "startDay": s,
+                "endDay": e,
+            }
+        )
     return {
         "equity": [round(float(e), 2) for e in equity_arr],
         "dailyPnl": [round(float(p), 2) for p in daily_pnl],
@@ -269,37 +276,28 @@ def _vrp_signal() -> dict:
     }
 
 
-def _risk_dashboard() -> dict:
-    """Synthetic risk limits utilization."""
-    rng = np.random.default_rng(55)
-    limits = {"delta": 50.0, "gamma": 0.01, "vega": 100000.0, "drawdown": 0.15}
-    current = {
-        "delta": round(float(rng.uniform(10, 40)), 2),
-        "gamma": round(float(rng.uniform(0.002, 0.008)), 5),
-        "vega": round(float(rng.uniform(30000, 80000)), 2),
-        "drawdown": round(float(rng.uniform(0.02, 0.08)), 4),
-    }
-    n_days = 60
-    history = []
-    for i in range(n_days):
-        history.append({
-            "day": i,
-            "deltaUtil": round(float(rng.uniform(0.2, 0.85)), 3),
-            "gammaUtil": round(float(rng.uniform(0.15, 0.9)), 3),
-            "vegaUtil": round(float(rng.uniform(0.3, 0.75)), 3),
-            "drawdownUtil": round(float(rng.uniform(0.1, 0.6)), 3),
-        })
-    verdicts = {
-        "APPROVE": int(rng.integers(120, 200)),
-        "RESIZE": int(rng.integers(15, 40)),
-        "REJECT": int(rng.integers(5, 20)),
-        "HALT": int(rng.integers(0, 3)),
-    }
+def _empty_risk_dashboard() -> dict:
+    """Risk panel with limits but no book — the truthful demo-mode state.
+
+    This replaces a generator that produced ``rng.uniform()`` utilisation and
+    ``rng.integers()`` verdict counts. Those rendered as a live risk monitor:
+    gauges at plausible percentages and a "222 verdicts" headline that was the
+    sum of four random integers. Nothing computed them, and there is no book in
+    demo mode to compute them from.
+
+    Limits are shown because they are real configuration; everything derived
+    from a book is null, so the UI reports it as absent rather than as zero.
+    """
     return {
-        "limits": limits,
-        "current": current,
-        "utilizationHistory": history,
-        "verdicts": verdicts,
+        "limits": {"delta": 500.0, "gamma": 50.0, "vega": 10000.0, "drawdown": 0.05},
+        "current": None,
+        "marginUtilization": None,
+        "drawdown": None,
+        "utilizationHistory": [],
+        "verdicts": None,
+        "legsPriced": 0,
+        "legsExcluded": 0,
+        "hasBook": False,
     }
 
 
@@ -314,17 +312,19 @@ def _option_chain() -> dict:
         put_p = float(bs_price(SPOT, k, expiry, RATE, 0.20, OptionType.PUT, DIV))
         m = np.log(k / SPOT)
         iv = 0.18 + abs(m) * 0.3
-        chain.append({
-            "strike": k,
-            "callPrice": round(call_p, 2),
-            "putPrice": round(put_p, 2),
-            "callDelta": round(call_g.delta, 4),
-            "putDelta": round(put_g.delta, 4),
-            "gamma": round(call_g.gamma, 8),
-            "vega": round(call_g.vega, 2),
-            "iv": round(float(iv), 4),
-            "oi": int(np.random.default_rng(42 + k).integers(1000, 50000)),
-        })
+        chain.append(
+            {
+                "strike": k,
+                "callPrice": round(call_p, 2),
+                "putPrice": round(put_p, 2),
+                "callDelta": round(call_g.delta, 4),
+                "putDelta": round(put_g.delta, 4),
+                "gamma": round(call_g.gamma, 8),
+                "vega": round(call_g.vega, 2),
+                "iv": round(float(iv), 4),
+                "oi": int(np.random.default_rng(42 + k).integers(1000, 50000)),
+            }
+        )
     return {"spot": SPOT, "expiry": expiry, "chain": chain}
 
 
@@ -333,14 +333,17 @@ def main() -> None:
     datasets = {
         "volSurface": _vol_surface(),
         "greeksComparison": _greeks_comparison(),
-        "scenarioGrid": _scenario_grid(),
+        # No book in demo mode, so no book-shaped panels. These used to
+        # emit rng.uniform() utilisation and a revalued invented contract,
+        # which rendered as if they described the user's own account.
+        "scenarioGrid": None,
         "pnlExplain": _pnl_explain(),
         "higherOrderGreeks": _higher_order_greeks(),
         "optionChain": _option_chain(),
         "essviCalibration": _essvi_calibration(),
         "backtestEquity": _backtest_equity(),
         "vrpSignal": _vrp_signal(),
-        "riskDashboard": _risk_dashboard(),
+        "riskDashboard": _empty_risk_dashboard(),
     }
     out = OUT_DIR / "demo.json"
     out.write_text(json.dumps(datasets, indent=2) + "\n")

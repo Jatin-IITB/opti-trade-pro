@@ -72,6 +72,9 @@ export function useLiveData(): LiveState & {
             ...prev,
             data: {
               ...prev.data,
+              // Only keys listed here can ever replace the bundled demo
+              // baseline. A key the backend computes but that is missing from
+              // this list renders demo data forever, silently.
               ...(d.volSurface && { volSurface: d.volSurface }),
               ...(d.greeksComparison && { greeksComparison: d.greeksComparison }),
               ...(d.optionChain && { optionChain: d.optionChain }),
@@ -79,6 +82,10 @@ export function useLiveData(): LiveState & {
                 essviCalibration: d.essviCalibration,
               }),
               ...(d.riskDashboard && { riskDashboard: d.riskDashboard }),
+              ...(d.scenarioGrid && { scenarioGrid: d.scenarioGrid }),
+              ...(d.higherOrderGreeks && {
+                higherOrderGreeks: d.higherOrderGreeks,
+              }),
             },
             spot: d.spot ?? prev.spot,
             underlying: d.underlying ?? prev.underlying,

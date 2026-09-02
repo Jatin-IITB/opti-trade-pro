@@ -46,22 +46,36 @@ export function PortfolioSummaryPanel({
     );
   }
 
+  const loginUrl = `/api/v1/auth/login?return_url=${encodeURIComponent(window.location.origin)}`;
+
   if (error) {
+    // 401/403 mean no valid Upstox session; 503 means the sync service has no
+    // stored token yet. All three are "log in", not "retry".
+    const isAuthError = /\b(401|403|503)\b/.test(error);
     return (
       <div className="space-y-4">
         <h2 className="text-xl font-semibold text-slate-100">Portfolio</h2>
         <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
           <div className="text-amber-400 text-sm mb-2">
-            Portfolio sync not available
+            {isAuthError ? "Not Connected" : "Portfolio sync error"}
           </div>
           <div className="text-slate-500 text-xs mb-4">{error}</div>
-          <p className="text-slate-400 text-xs">
-            Authenticate via{" "}
-            <a href="/api/v1/auth/login" className="text-blue-400 underline">
-              Upstox login
-            </a>{" "}
-            to connect your portfolio.
-          </p>
+          {isAuthError ? (
+            <p className="text-slate-400 text-xs">
+              Authenticate via{" "}
+              <a href={loginUrl} className="text-blue-400 underline">
+                Upstox login
+              </a>{" "}
+              to connect your portfolio.
+            </p>
+          ) : (
+            <button
+              onClick={onRefresh}
+              className="px-3 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs hover:bg-slate-600 transition-colors"
+            >
+              Retry
+            </button>
+          )}
         </div>
       </div>
     );
@@ -72,13 +86,10 @@ export function PortfolioSummaryPanel({
       <div className="space-y-4">
         <h2 className="text-xl font-semibold text-slate-100">Portfolio</h2>
         <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
-          <div className="text-amber-400 text-sm mb-2">Not Connected</div>
+          <div className="text-blue-400 text-sm mb-2">Syncing portfolio...</div>
           <p className="text-slate-400 text-xs">
-            Authenticate via{" "}
-            <a href="/api/v1/auth/login" className="text-blue-400 underline">
-              Upstox login
-            </a>{" "}
-            to sync your live portfolio.
+            Fetching your positions from Upstox. This usually takes a few
+            seconds.
           </p>
         </div>
       </div>
@@ -86,18 +97,41 @@ export function PortfolioSummaryPanel({
   }
 
   const greeks = summary.aggregate_greeks;
-  const greekCards: [string, number][] = [
-    ["Delta", greeks.delta],
-    ["Gamma", greeks.gamma],
-    ["Vega", greeks.vega],
-    ["Theta", greeks.theta],
-    ["Rho", greeks.rho],
-    ["Vanna", greeks.vanna],
-    ["Volga", greeks.volga],
-  ];
+  const greekCards: [string, number][] = greeks
+    ? [
+        ["Delta", greeks.delta],
+        ["Gamma", greeks.gamma],
+        ["Vega", greeks.vega],
+        ["Theta", greeks.theta],
+        ["Rho", greeks.rho],
+        ["Vanna", greeks.vanna],
+        ["Volga", greeks.volga],
+      ]
+    : [];
+
+  const inr = (v: number) => `₹${v.toLocaleString("en-IN")}`;
+  // A null field means the input is unavailable, not that the value is zero.
+  const opt = (v: number | null, fmt: (n: number) => string) =>
+    v === null || v === undefined ? "—" : fmt(v);
 
   return (
     <div className="space-y-4">
+      {syncStatus?.auth_required && (
+        <div className="rounded-lg border border-amber-700/50 bg-amber-950/40 px-4 py-3">
+          <div className="text-amber-300 text-sm font-medium mb-1">
+            Upstox session expired
+          </div>
+          <p className="text-amber-200/80 text-xs">
+            The figures below are from the last successful sync and are no
+            longer updating. Upstox access tokens expire daily.{" "}
+            <a href={loginUrl} className="text-blue-400 underline">
+              Log in again
+            </a>{" "}
+            to resume.
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-100">Portfolio</h2>
@@ -152,7 +186,12 @@ export function PortfolioSummaryPanel({
         <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-4">
           <div className="text-xs text-slate-500">Equity</div>
           <div className="text-2xl font-mono text-slate-100 mt-1">
-            ₹{summary.equity.toLocaleString("en-IN")}
+            {opt(summary.equity, inr)}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            {summary.margin_utilization === null
+              ? "margin unavailable"
+              : `${(summary.margin_utilization * 100).toFixed(1)}% margin used`}
           </div>
         </div>
         <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-4">
@@ -169,22 +208,43 @@ export function PortfolioSummaryPanel({
 
       {/* Aggregate Greeks */}
       <div>
-        <div className="text-xs text-slate-500 mb-2">
-          Portfolio Aggregate Greeks
-        </div>
-        <div className="grid grid-cols-7 gap-3">
-          {greekCards.map(([label, value]) => (
-            <div
-              key={label}
-              className="bg-slate-800/50 rounded-lg border border-slate-700 p-3 text-center"
-            >
-              <div className="text-xs text-slate-500">{label}</div>
-              <div className={`text-lg font-mono mt-1 ${colorClass(value)}`}>
-                {formatNum(value)}
-              </div>
+        <div className="flex items-baseline justify-between mb-2">
+          <div className="text-xs text-slate-500">
+            Portfolio Aggregate Greeks
+          </div>
+          {greeks && (
+            <div className="text-xs text-slate-600">
+              {summary.greeks_priced} of {summary.core_positions} F&O legs
+              priced at spot {opt(summary.spot, (v) => v.toLocaleString("en-IN"))}
             </div>
-          ))}
+          )}
         </div>
+        {greeks ? (
+          <div className="grid grid-cols-7 gap-3">
+            {greekCards.map(([label, value]) => (
+              <div
+                key={label}
+                className="bg-slate-800/50 rounded-lg border border-slate-700 p-3 text-center"
+              >
+                <div className="text-xs text-slate-500">{label}</div>
+                <div className={`text-lg font-mono mt-1 ${colorClass(value)}`}>
+                  {formatNum(value)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 text-center">
+            <div className="text-amber-400 text-sm mb-1">
+              Awaiting live market data
+            </div>
+            <p className="text-slate-400 text-xs">
+              Book Greeks need a live underlying price. The capture schedule
+              supplies it on its next cycle — your positions and P&amp;L above
+              are unaffected.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

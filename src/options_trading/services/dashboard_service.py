@@ -6,13 +6,18 @@ Provides real-time system monitoring, risk calculations, and infrastructure stat
 Strategy-related functionality moved to StrategyService for better separation of concerns.
 """
 
-import asyncio
 import logging
+import re
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
+from time import perf_counter
 from typing import Any
 
+import numpy as np
 import psutil
+
+from optitrade.greeks.scenario import ScenarioGrid, run_scenario_grid
 
 from ..config.settings import get_settings
 
@@ -30,8 +35,22 @@ from ..models.dashboard import (
 )
 from ..utils.cache import AsyncCache
 from ..utils.exceptions import CalculationError, DataQualityError
+from .book_pricing import PricedBook, price_book, risk_limits_from_settings
+from .live_analytics import BookContext
 
 logger = logging.getLogger(__name__)
+
+#: Named shocks as ``(relative spot move, absolute vol-point move)``.
+#: Defined here as scenario *definitions*, not as stored outcomes — the P&L is
+#: computed by revaluing the actual book under each one.
+STRESS_SCENARIOS: dict[str, tuple[float, float]] = {
+    "spot_down_10pct": (-0.10, 0.0),
+    "spot_up_10pct": (0.10, 0.0),
+    "vol_spike_10pts": (0.0, 0.10),
+    "vol_crush_5pts": (0.0, -0.05),
+    "crash_spot_down_10pct_vol_up_10pts": (-0.10, 0.10),
+    "melt_up_spot_up_10pct_vol_down_5pts": (0.10, -0.05),
+}
 
 
 class DashboardService:
@@ -41,10 +60,22 @@ class DashboardService:
     """
 
     def __init__(
-        self, market_data_manager: MarketDataManager | None = None, cache: AsyncCache | None = None
+        self,
+        market_data_manager: MarketDataManager | None = None,
+        cache: AsyncCache | None = None,
+        book_fn: Callable[[], BookContext | None] | None = None,
+        spot_fn: Callable[[], float | None] | None = None,
     ):
+        """``book_fn``/``spot_fn`` supply the live book and underlying level.
+
+        Injected rather than imported so this service does not depend on the
+        portfolio sync. Without them the position and risk endpoints report
+        what they cannot compute instead of returning placeholder numbers.
+        """
         self.settings = get_settings()
         self.market_data_manager = market_data_manager
+        self._book_fn = book_fn
+        self._spot_fn = spot_fn
         self._system_start_time = datetime.now()
 
         # FIXED: Use correct AsyncCache initialization
@@ -161,16 +192,21 @@ class DashboardService:
                     from datetime import date
 
                     nearest_expiry = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
+                    # Time the real broker round-trip below: that is the
+                    # latency users care about. The previous helper timed its
+                    # own asyncio.sleep(0.001) and always reported ~5ms.
+                    fetch_started = perf_counter()
                     contracts = self.market_data_manager.fetch_contracts_for_expiry(
                         symbol, "NSE", nearest_expiry
                     )
+                    latency_ms = (perf_counter() - fetch_started) * 1000.0
 
                     feed_status = MarketDataFeed(
                         name=f"{symbol} NSE",
                         status=ConnectionStatus.CONNECTED,
                         instruments_count=len(contracts),
                         last_update=datetime.now(),
-                        latency_ms=await self._measure_real_latency(symbol),
+                        latency_ms=round(latency_ms, 2),
                         error_rate=0.0,
                     )
                     connected_feeds.append(feed_status)
@@ -208,18 +244,6 @@ class DashboardService:
             return MarketDataStatus(
                 overall_status=ConnectionStatus.ERROR, feeds_connected=0, total_instruments=0
             )
-
-    async def _measure_real_latency(self, symbol: str) -> float:
-        """Measure real latency for market data calls"""
-        try:
-            start_time = datetime.now()
-            # Simple latency test - could be improved with actual API calls
-            await asyncio.sleep(0.001)  # Simulate minimal latency
-            end_time = datetime.now()
-            latency_ms = (end_time - start_time).total_seconds() * 1000
-            return max(latency_ms, 5.0)  # Minimum 5ms realistic latency
-        except Exception:
-            return 999.0  # High latency on error
 
     def _get_system_metrics(self) -> SystemMetrics:
         """Get current system performance metrics with caching"""
@@ -361,6 +385,129 @@ class DashboardService:
             logger.error(f"Failed to get system alerts: {e}")
             return []
 
+    def _priced_book(self) -> tuple[PricedBook | None, BookContext | None]:
+        """Price the synced book at the live spot, or ``(None, book)``."""
+        book = self._book_fn() if self._book_fn is not None else None
+        if book is None or not book.portfolio.positions:
+            return None, book
+        spot = self._spot_fn() if self._spot_fn is not None else None
+        if spot is None or spot <= 0:
+            logger.debug("No live spot; book-derived metrics unavailable")
+            return None, book
+        try:
+            return price_book(book.portfolio, marks=book.marks, spot=spot), book
+        except Exception:
+            logger.exception("Failed to price the book for dashboard metrics")
+            return None, book
+
+    @staticmethod
+    def _concentration_by_underlying(priced: PricedBook) -> dict[str, float]:
+        """Share of absolute gross notional per underlying, in percent."""
+        by_symbol: dict[str, float] = {}
+        for leg in priced.legs:
+            # Trading symbols lead with the underlying, e.g. NIFTY24907...
+            match = re.match(r"^([A-Z]+)", leg.contract.symbol)
+            key = match.group(1) if match else leg.contract.symbol
+            by_symbol[key] = by_symbol.get(key, 0.0) + abs(leg.quantity * leg.mark)
+        total = sum(by_symbol.values())
+        if total <= 0:
+            return {}
+        return {k: round(v / total * 100.0, 2) for k, v in sorted(by_symbol.items())}
+
+    def _build_positions_summary(self) -> PositionSummary:
+        """Position summary derived from the synced book.
+
+        Fields with no source stay null: ``daily_pnl`` needs a prior-close
+        snapshot and ``active_strategies`` a strategy store, neither of which
+        this read-only app persists.
+        """
+        priced, book = self._priced_book()
+
+        if book is None:
+            return PositionSummary(total_positions=0, total_pnl=Decimal("0"))
+
+        total_pnl = (
+            sum(
+                (leg.mark - pos.entry_price) * pos.quantity
+                for leg, pos in zip(priced.legs, book.portfolio.positions, strict=False)
+            )
+            if priced
+            else 0.0
+        )
+
+        summary = PositionSummary(
+            total_positions=len(book.portfolio.positions),
+            total_pnl=Decimal(str(round(total_pnl, 2))),
+            margin_used=(Decimal(str(book.margin_used)) if book.margin_used is not None else None),
+            available_margin=(
+                Decimal(str(book.margin_available)) if book.margin_available is not None else None
+            ),
+        )
+        if priced is None:
+            return summary
+
+        agg = priced.aggregate_greeks
+        return summary.model_copy(
+            update={
+                "portfolio_delta": Decimal(str(round(agg.delta, 4))),
+                "portfolio_gamma": Decimal(str(round(agg.gamma, 6))),
+                "portfolio_theta": Decimal(str(round(agg.theta, 4))),
+                "portfolio_vega": Decimal(str(round(agg.vega, 4))),
+                "concentration_risk": self._concentration_by_underlying(priced),
+            }
+        )
+
+    def _build_risk_metrics(self) -> RiskMetrics:
+        """Risk metrics from the live book.
+
+        VaR, expected shortfall, drawdown and beta need a persisted P&L return
+        series and stay null. Stress tests are a genuine full revaluation of
+        the book under named shocks, not a stored table of historical episodes.
+        """
+        limits = risk_limits_from_settings()
+        concentration_limits = {"single_underlying": limits.max_concentration * 100.0}
+
+        priced, _ = self._priced_book()
+        if priced is None or not priced.legs:
+            return RiskMetrics(concentration_limits=concentration_limits)
+
+        agg = priced.aggregate_greeks
+        return RiskMetrics(
+            portfolio_delta=Decimal(str(round(agg.delta, 4))),
+            portfolio_gamma=Decimal(str(round(agg.gamma, 6))),
+            portfolio_theta=Decimal(str(round(agg.theta, 4))),
+            portfolio_vega=Decimal(str(round(agg.vega, 4))),
+            portfolio_rho=Decimal(str(round(agg.rho, 4))),
+            delta_limit_utilization=abs(agg.delta) / limits.max_abs_delta * 100.0,
+            gamma_limit_utilization=abs(agg.gamma) / limits.max_abs_gamma * 100.0,
+            vega_limit_utilization=abs(agg.vega) / limits.max_abs_vega * 100.0,
+            concentration_limits=concentration_limits,
+            stress_test_results=self._run_stress_tests(priced),
+        )
+
+    @staticmethod
+    def _run_stress_tests(priced: PricedBook) -> dict[str, Decimal]:
+        """Revalue the book under each named shock and report the P&L.
+
+        Full revaluation via the scenario engine, so the numbers describe this
+        book under this shock — as opposed to the previous hardcoded table of
+        historical episode losses, which described nothing.
+        """
+        book = priced.to_scenario_book()
+        results: dict[str, Decimal] = {}
+        for name, (spot_shift, vol_shift) in STRESS_SCENARIOS.items():
+            try:
+                grid = ScenarioGrid(
+                    spot_shifts=np.array([spot_shift]),
+                    vol_shifts=np.array([vol_shift]),
+                    time_shifts=np.array([0.0]),
+                )
+                result = run_scenario_grid(book, spot=priced.spot, rate=priced.rate, grid=grid)
+                results[name] = Decimal(str(round(float(result.pnl[0, 0, 0]), 2)))
+            except Exception:
+                logger.exception("Stress scenario %s failed", name)
+        return results
+
     async def get_positions_summary(
         self, symbol: str | None = None, expiry_date: str | None = None
     ) -> PositionSummary:
@@ -374,21 +521,7 @@ class DashboardService:
             if cached_summary:
                 return cached_summary
 
-            # This would aggregate data from StrategyService
-            summary = PositionSummary(
-                total_positions=24,
-                active_strategies=2,
-                total_pnl=Decimal("18000.00"),
-                daily_pnl=Decimal("4250.00"),
-                margin_used=Decimal("245000.00"),
-                available_margin=Decimal("355000.00"),
-                portfolio_delta=Decimal("0.02"),
-                portfolio_gamma=Decimal("0.68"),
-                portfolio_theta=Decimal("-148.03"),
-                portfolio_vega=Decimal("258.46"),
-                concentration_risk={"NIFTY": 65.5, "BANKNIFTY": 25.2, "FINNIFTY": 9.3},
-            )
-
+            summary = self._build_positions_summary()
             await self._cache.set_by_key(cache_key, summary, ttl=60)
             return summary
 
@@ -406,29 +539,7 @@ class DashboardService:
             if cached_metrics:
                 return cached_metrics
 
-            # This would integrate with your risk calculation engine
-            metrics = RiskMetrics(
-                var_1d=Decimal("25000.00"),
-                var_1d_percentage=Decimal("4.17"),
-                expected_shortfall=Decimal("31250.00"),
-                maximum_drawdown=Decimal("18500.00"),
-                beta=Decimal("0.85"),
-                portfolio_delta=Decimal("0.02"),
-                portfolio_gamma=Decimal("0.68"),
-                portfolio_theta=Decimal("-148.03"),
-                portfolio_vega=Decimal("258.46"),
-                portfolio_rho=Decimal("45.78"),
-                delta_limit_utilization=12.5,
-                gamma_limit_utilization=34.2,
-                vega_limit_utilization=25.8,
-                concentration_limits={"single_symbol": 35.0, "sector": 60.0, "expiry": 45.0},
-                stress_test_results={
-                    "market_crash_2008": Decimal("-125000.00"),
-                    "covid_crash_2020": Decimal("-89000.00"),
-                    "volatility_spike": Decimal("-67000.00"),
-                },
-            )
-
+            metrics = self._build_risk_metrics()
             await self._cache.set_by_key("risk_metrics", metrics, ttl=300)
             return metrics
 
@@ -495,8 +606,6 @@ class DashboardService:
 
             # Clear relevant caches
             await self._cache.clear()
-
-            await asyncio.sleep(1)  # Simulate processing time
             logger.info(f"Analytics recomputation completed for {symbol}")
 
         except Exception as e:

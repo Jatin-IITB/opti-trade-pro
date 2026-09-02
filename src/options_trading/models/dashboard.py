@@ -180,38 +180,55 @@ class StrategyPerformance(BaseModel):
 
 
 class PositionSummary(BaseModel):
-    """Aggregated position summary"""
+    """Aggregated position summary.
+
+    Nullable fields have no source in a read-only app: ``daily_pnl`` needs a
+    prior-close snapshot and ``active_strategies`` a strategy store, neither of
+    which is persisted; Greeks and margin need a live spot and the broker funds
+    call. Null means unknown — zero would read as a flat book, which is a
+    materially different and more dangerous claim.
+    """
 
     total_positions: int
-    active_strategies: int
+    active_strategies: int | None = None
     total_pnl: Decimal
-    daily_pnl: Decimal
-    margin_used: Decimal
-    available_margin: Decimal
-    portfolio_delta: Decimal
-    portfolio_gamma: Decimal
-    portfolio_theta: Decimal
-    portfolio_vega: Decimal
+    daily_pnl: Decimal | None = None
+    margin_used: Decimal | None = None
+    available_margin: Decimal | None = None
+    portfolio_delta: Decimal | None = None
+    portfolio_gamma: Decimal | None = None
+    portfolio_theta: Decimal | None = None
+    portfolio_vega: Decimal | None = None
     concentration_risk: dict[str, float] = Field(default_factory=dict)
 
 
 class RiskMetrics(BaseModel):
-    """Comprehensive risk metrics"""
+    """Comprehensive risk metrics.
 
-    var_1d: Decimal  # 1-day Value at Risk
-    var_1d_percentage: Decimal
-    expected_shortfall: Decimal
-    maximum_drawdown: Decimal
+    VaR, expected shortfall, maximum drawdown and beta all need a P&L return
+    history, which is not persisted — they are null rather than invented.
+    Greeks, limit utilisation and stress tests are computed from the live book.
+
+    Utilisation has no upper bound: a book already over its limit is exactly
+    what this panel exists to show, so it is not clamped to 100.
+    """
+
+    var_1d: Decimal | None = None
+    var_1d_percentage: Decimal | None = None
+    expected_shortfall: Decimal | None = None
+    maximum_drawdown: Decimal | None = None
     beta: Decimal | None = None
-    portfolio_delta: Decimal
-    portfolio_gamma: Decimal
-    portfolio_theta: Decimal
-    portfolio_vega: Decimal
-    portfolio_rho: Decimal
-    delta_limit_utilization: float = Field(ge=0.0, le=100.0)
-    gamma_limit_utilization: float = Field(ge=0.0, le=100.0)
-    vega_limit_utilization: float = Field(ge=0.0, le=100.0)
+    portfolio_delta: Decimal | None = None
+    portfolio_gamma: Decimal | None = None
+    portfolio_theta: Decimal | None = None
+    portfolio_vega: Decimal | None = None
+    portfolio_rho: Decimal | None = None
+    delta_limit_utilization: float | None = Field(default=None, ge=0.0)
+    gamma_limit_utilization: float | None = Field(default=None, ge=0.0)
+    vega_limit_utilization: float | None = Field(default=None, ge=0.0)
     concentration_limits: dict[str, float] = Field(default_factory=dict)
+    #: Full revaluation of the book under named shocks via the optitrade
+    #: scenario engine — not a stored table of historical episode P&Ls.
     stress_test_results: dict[str, Decimal] = Field(default_factory=dict)
 
 

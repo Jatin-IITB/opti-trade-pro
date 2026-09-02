@@ -3,7 +3,6 @@
 Production-grade dashboard routes for options trading platform.
 """
 
-import dataclasses
 import logging
 from datetime import datetime
 from typing import Any
@@ -29,7 +28,21 @@ from ..dependencies import get_dashboard_service, get_market_data_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-websocket_manager = WebSocketManager()
+
+def _ws_manager(app: Any) -> WebSocketManager:
+    """Resolve the application-wide WebSocketManager.
+
+    There must be exactly one instance per app: browser clients register on
+    it here, and ``LivePipelineService`` / ``PortfolioSyncService`` broadcast
+    on it. A second instance would accept connections that no broadcaster can
+    ever reach, so this reads from ``app.state`` rather than constructing one.
+    """
+    manager = getattr(app.state, "websocket_manager", None)
+    if manager is None:
+        manager = WebSocketManager()
+        app.state.websocket_manager = manager
+        logger.warning("websocket_manager missing from app.state; created one lazily")
+    return manager
 
 
 @router.get("/status", response_model=SystemStatus)
@@ -121,8 +134,8 @@ async def get_risk_metrics(
 async def websocket_endpoint(
     websocket: WebSocket,
     client_id: str,
-    market_service: MarketDataService = Depends(get_market_data_service),
 ):
+    websocket_manager = _ws_manager(websocket.app)
     await websocket_manager.connect(websocket, client_id)
     try:
         while True:
@@ -155,7 +168,7 @@ async def websocket_endpoint(
                         await websocket.send_json(
                             {
                                 "type": "dashboard_update",
-                                "data": dataclasses.asdict(snapshot),
+                                "data": snapshot.to_wire_dict(),
                                 "timestamp": datetime.now().isoformat(),
                             }
                         )
@@ -212,16 +225,16 @@ async def get_live_snapshot(request: Request) -> Any:
     snapshot = pipeline.get_latest_snapshot()
     if snapshot is None:
         return JSONResponse(status_code=204, content=None)
-    return dataclasses.asdict(snapshot)
+    return snapshot.to_wire_dict()
 
 
 @router.get("/health")
-async def dashboard_health_check() -> dict[str, Any]:
+async def dashboard_health_check(request: Request) -> dict[str, Any]:
     try:
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "active_connections": websocket_manager.connection_count(),
+            "active_connections": _ws_manager(request.app).connection_count(),
             "version": "2.0.0",
         }
     except Exception as e:

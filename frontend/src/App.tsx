@@ -26,6 +26,7 @@ import { EssviCalibration } from "./components/EssviCalibration";
 import { BacktestEquity } from "./components/BacktestEquity";
 import { VrpSignal } from "./components/VrpSignal";
 import { RiskDashboard } from "./components/RiskDashboard";
+import { HoldingsTable } from "./components/HoldingsTable";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
@@ -69,10 +70,24 @@ class ErrorBoundary extends Component<
   }
 }
 
+/**
+ * Where a panel's numbers come from.
+ *
+ * - `account`  — your broker account. Real money, real positions.
+ * - `market`   — computed by the quant engines from a captured live option
+ *                chain. Falls back to bundled demo data until the first
+ *                capture cycle completes.
+ * - `synthetic`— genuine engine output over *simulated* inputs. There is no
+ *                live data path for these yet, so nothing here describes your
+ *                book or the current market.
+ */
+type DataSource = "account" | "market" | "synthetic";
+
 interface NavItem {
   id: string;
   label: string;
   icon: typeof Layers;
+  source: DataSource;
 }
 
 interface NavGroup {
@@ -84,41 +99,82 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Volatility",
     items: [
-      { id: "surface", label: "Vol Surface", icon: Layers },
-      { id: "essvi", label: "eSSVI Fit", icon: Target },
-      { id: "chain", label: "Option Chain", icon: Table },
+      { id: "surface", label: "Vol Surface", icon: Layers, source: "market" },
+      { id: "essvi", label: "eSSVI Fit", icon: Target, source: "market" },
+      { id: "chain", label: "Option Chain", icon: Table, source: "market" },
     ],
   },
   {
     label: "Greeks & Risk",
     items: [
-      { id: "greeks", label: "Greeks Book", icon: BarChart3 },
-      { id: "higher", label: "Higher-Order", icon: Zap },
-      { id: "risk", label: "Risk", icon: Shield },
+      {
+        id: "greeks",
+        label: "Greeks Book",
+        icon: BarChart3,
+        source: "market",
+      },
+      { id: "higher", label: "Higher-Order", icon: Zap, source: "market" },
+      { id: "risk", label: "Risk", icon: Shield, source: "account" },
     ],
   },
   {
     label: "P&L & Scenarios",
     items: [
-      { id: "pnl", label: "P&L Explain", icon: TrendingUp },
-      { id: "scenarios", label: "Scenarios", icon: Grid3x3 },
+      { id: "pnl", label: "P&L Explain", icon: TrendingUp, source: "synthetic" },
+      {
+        id: "scenarios",
+        label: "Scenarios",
+        icon: Grid3x3,
+        source: "account",
+      },
     ],
   },
   {
     label: "Strategy",
     items: [
-      { id: "backtest", label: "Backtest", icon: LineChart },
-      { id: "vrp", label: "VRP Signal", icon: Activity },
+      {
+        id: "backtest",
+        label: "Backtest",
+        icon: LineChart,
+        source: "synthetic",
+      },
+      { id: "vrp", label: "VRP Signal", icon: Activity, source: "synthetic" },
     ],
   },
   {
     label: "Portfolio",
     items: [
-      { id: "portfolio", label: "Positions", icon: Briefcase },
-      { id: "connectors", label: "Connectors", icon: Plug },
+      { id: "portfolio", label: "Positions", icon: Briefcase, source: "account" },
+      { id: "connectors", label: "Connectors", icon: Plug, source: "account" },
     ],
   },
 ];
+
+/** Why a given panel cannot yet show real numbers. */
+const SYNTHETIC_REASON: Record<string, string> = {
+  pnl: "P&L attribution needs two consecutive daily portfolio snapshots plus the vol surface between them. Snapshot history is not yet accumulating.",
+  backtest:
+    "This equity curve is a seeded random walk, not a strategy result. The real walk-forward engine with deflated Sharpe exists but is not connected to this panel.",
+  vrp: "The IV and realised-vol series are simulated. Real VRP needs a persisted ATM-IV time series and realised vol from spot history.",
+};
+
+function SyntheticNotice({ tabId }: { tabId: string }) {
+  const reason = SYNTHETIC_REASON[tabId];
+  if (!reason) return null;
+  return (
+    <div className="mb-4 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+          Synthetic
+        </span>
+        <p className="text-xs leading-relaxed text-amber-200/80">
+          Engine output on <strong>simulated inputs</strong> — this does not
+          reflect your account or current market. {reason}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 type TabId = string;
 
@@ -179,7 +235,7 @@ function SidebarGroup({
       </button>
       {open && (
         <div className="space-y-0.5 pb-2">
-          {group.items.map(({ id, label, icon: Icon }) => (
+          {group.items.map(({ id, label, icon: Icon, source }) => (
             <button
               key={id}
               onClick={() => onSelect(id)}
@@ -190,7 +246,15 @@ function SidebarGroup({
               }`}
             >
               <Icon size={15} className="shrink-0" />
-              {label}
+              <span className="flex-1 text-left">{label}</span>
+              {source === "synthetic" && (
+                <span
+                  title="Synthetic — engine output on simulated inputs, not your account"
+                  className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-400/90"
+                >
+                  Sim
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -272,6 +336,7 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-[1200px] mx-auto px-6 py-6">
+            <SyntheticNotice tabId={activeTab} />
             <ErrorBoundary>
               {activeTab === "surface" && (
                 <VolSurface data={data.volSurface} />
@@ -309,7 +374,10 @@ export default function App() {
                     onRefresh={portfolio.refresh}
                   />
                   {portfolio.summary?.synced && (
-                    <PositionSignals signals={portfolio.signals} />
+                    <>
+                      <PositionSignals signals={portfolio.signals} />
+                      <HoldingsTable holdings={portfolio.holdings} />
+                    </>
                   )}
                 </div>
               )}
