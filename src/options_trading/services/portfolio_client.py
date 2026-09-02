@@ -521,7 +521,17 @@ def to_core_portfolio(
             strike=strike,
             expiry=expiry_yf,
             option_type=option_type,
-            lot_size=max(pos.multiplier, 1),
+            # lot_size=1 because Upstox reports `quantity` in UNITS, already
+            # lot-multiplied, whereas the core convention is quantity-in-lots
+            # scaled by lot_size (e.g. walk_forward: quantity * lot_size * price).
+            # Setting 1 makes `quantity * lot_size` the true unit count.
+            #
+            # Do NOT use `multiplier` here: it is a P&L scaling factor, not a
+            # contract size. Upstox returns multiplier=1.0 for an NSE F&O option
+            # whose lot size is 15, and 1000.0 for a currency derivative — so
+            # mapping it to lot_size silently inflated notional and
+            # concentration by 1000x on the CDS segment.
+            lot_size=1,
         )
         entry_price = pos.buy_price if pos.quantity > 0 else pos.sell_price
         core_positions.append(

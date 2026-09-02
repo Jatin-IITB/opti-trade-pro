@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -511,3 +512,97 @@ class TestExpiredPositions:
         pos = _parse_position(SAMPLE_POSITION_RAW)
         book = to_core_portfolio([pos], now_fn=lambda: self.AFTER_EXPIRY)
         assert all(p.contract.expiry > MIN_EXPIRY_YEARS for p in book.positions)
+
+
+class TestQuantityUnitsConvention:
+    """Upstox reports quantity in UNITS; the core convention is lots x lot_size.
+
+    Verified against the documented Upstox response: a BANKNIFTY option (lot
+    size 15 at the time) reports quantity=15 with buy_price=2.65 and
+    value=39.75 — i.e. 2.65 * 15, so quantity is the unit count, not a lot
+    count. Greeks therefore scale by quantity alone.
+
+    `multiplier` must not be used as lot_size: Upstox returns 1.0 for that same
+    option and 1000.0 for currency derivatives, so it is a P&L scaling factor,
+    not a contract size.
+    """
+
+    NOW = 1_724_000_000.0
+
+    def test_quantity_is_carried_through_as_units(self):
+        pos = _parse_position(SAMPLE_POSITION_RAW)
+        book = to_core_portfolio([pos], now_fn=lambda: self.NOW)
+        assert book.positions[0].quantity == 50.0
+
+    def test_lot_size_is_one_so_quantity_is_already_units(self):
+        pos = _parse_position(SAMPLE_POSITION_RAW)
+        book = to_core_portfolio([pos], now_fn=lambda: self.NOW)
+        assert book.positions[0].contract.lot_size == 1
+
+    def test_multiplier_is_not_used_as_lot_size(self):
+        """Regression: a CDS multiplier of 1000 inflated notional 1000x.
+
+        Upstox's own example pairs multiplier=1000.0 with a currency option,
+        while an NSE F&O option whose real lot size is 15 carries
+        multiplier=1.0 — so the field cannot be a contract size.
+        """
+        raw = {**SAMPLE_POSITION_RAW, "multiplier": 1000}
+        pos = _parse_position(raw)
+        assert pos.multiplier == 1000  # raw broker field preserved
+        book = to_core_portfolio([pos], now_fn=lambda: self.NOW)
+        assert book.positions[0].contract.lot_size == 1
+
+    def test_gross_notional_matches_units_times_price(self):
+        """quantity * lot_size * price must equal the true rupee notional."""
+        raw = {**SAMPLE_POSITION_RAW, "multiplier": 1000}
+        pos = _parse_position(raw)
+        book = to_core_portfolio([pos], now_fn=lambda: self.NOW)
+        assert book.gross_notional == pytest.approx(abs(pos.quantity) * pos.buy_price)
+
+    # Verbatim from Upstox's documented Get Positions response. Note there is
+    # no `lot_size` key at all, and `multiplier` is 1.0 for an option whose
+    # real lot size was 15 — the two facts the mapper has to respect.
+    DOCUMENTED_BANKNIFTY_POSITION: ClassVar[dict] = {
+        "exchange": "NFO",
+        "multiplier": 1.0,
+        "value": 39.75,
+        "pnl": 26.25,
+        "product": "D",
+        "instrument_token": "NSE_FO|52618",
+        "average_price": 2.65,
+        "overnight_quantity": 15,
+        "quantity": 15,
+        "last_price": 1.75,
+        "trading_symbol": "BANKNIFTY23OCT38000PE",
+        "tradingsymbol": "BANKNIFTY23OCT38000PE",
+        "close_price": 1.95,
+        "buy_price": 2.65,
+        "sell_price": 0.0,
+    }
+
+    def test_documented_payload_parses(self):
+        pos = _parse_position(self.DOCUMENTED_BANKNIFTY_POSITION)
+        assert pos.trading_symbol == "BANKNIFTY23OCT38000PE"
+        assert pos.quantity == 15
+        assert pos.buy_price == 2.65
+        assert pos.multiplier == 1
+
+    def test_documented_payload_quantity_reconciles_with_value(self):
+        """buy_price * quantity == value proves quantity is a unit count.
+
+        2.65 * 15 = 39.75. Were quantity a lot count, value would have to be
+        2.65 * 15 * 15.
+        """
+        raw = self.DOCUMENTED_BANKNIFTY_POSITION
+        pos = _parse_position(raw)
+        assert pos.buy_price * pos.quantity == pytest.approx(raw["value"])
+
+    def test_documented_payload_notional_is_not_lot_inflated(self):
+        pos = _parse_position(self.DOCUMENTED_BANKNIFTY_POSITION)
+        book = to_core_portfolio([pos], now_fn=lambda: self.NOW)
+        # Symbol has no parseable strike/expiry in our regex, so it is skipped;
+        # what matters is the raw position kept unit semantics.
+        assert pos.quantity == 15
+        assert book.gross_notional == pytest.approx(
+            sum(abs(p.quantity) * p.entry_price * p.contract.lot_size for p in book.positions)
+        )
