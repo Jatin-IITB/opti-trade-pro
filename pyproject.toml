@@ -30,6 +30,9 @@ dependencies = [
     "pydantic-settings>=2.2.0",
     "httpx>=0.27.0",
     "requests>=2.31.0",
+    # Imported directly (SessionMiddleware, status codes) rather than only via
+    # FastAPI, so it is declared rather than relied on transitively.
+    "starlette>=0.37.0",
     "aiofiles>=23.2.0",
     "cryptography>=42.0.0",
     "keyring>=24.3.0",
@@ -38,6 +41,11 @@ dependencies = [
     "jinja2>=3.1.0",
     "itsdangerous>=2.1.0",
     "pyarrow>=14.0.0",
+    # Verifies broker TLS against the OS trust store so corporate proxies
+    # (Zscaler) that re-sign certificates do not break every outbound call.
+    # Imported at module scope in auth_service, so a missing install is a hard
+    # ImportError, not a degraded path.
+    "truststore>=0.9.0",
 ]
 
 [project.optional-dependencies]

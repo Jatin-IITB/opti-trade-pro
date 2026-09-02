@@ -1,5 +1,7 @@
 """Tests for the live dashboard analytics payload builder."""
 
+import importlib.util
+
 import pytest
 
 from options_trading.config.settings import settings
@@ -11,6 +13,9 @@ from options_trading.services.live_analytics import (
 )
 from optitrade.core.types import OptionContract, Portfolio, Position
 from optitrade.data.capture import SyntheticSource, to_market_snapshot
+
+# Higher-order Greeks need the optional jax extra; CI installs only [dev].
+_HAS_JAX = importlib.util.find_spec("jax") is not None
 
 
 @pytest.fixture()
@@ -307,6 +312,16 @@ class TestRiskDashboard:
 
 
 class TestHigherOrderGreeks:
+    def test_absent_without_jax_rather_than_stubbed(self, payload):
+        """The panel reports nothing when JAX is absent — never stand-in numbers.
+
+        Holds either way, so it is the one assertion that does not need the
+        optional extra.
+        """
+        if not _HAS_JAX:
+            assert payload.higher_order_greeks is None
+
+    @pytest.mark.skipif(not _HAS_JAX, reason="optional jax extra not installed")
     def test_built_from_the_live_atm_contract(self, payload):
         hog = payload.higher_order_greeks
         assert hog is not None
@@ -314,6 +329,7 @@ class TestHigherOrderGreeks:
             assert key in hog
             assert isinstance(hog[key], float)
 
+    @pytest.mark.skipif(not _HAS_JAX, reason="optional jax extra not installed")
     def test_reports_the_contract_it_priced(self, payload, chain):
         contract = payload.higher_order_greeks["contract"]
         assert contract["spot"] == pytest.approx(chain.spot)
