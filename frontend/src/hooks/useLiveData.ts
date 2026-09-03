@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import demoData from "../data/demo.json";
 
+/**
+ * Every field is nullable and starts null.
+ *
+ * This used to be seeded from `demo.json`, a bundled chain priced off a
+ * 20,000 NIFTY. Because the backend sends nothing until the first capture
+ * completes, that baseline was not a brief flash before real data — it was
+ * the steady state for as long as the market was shut, rendered
+ * indistinguishably from live values. The file has been deleted rather than
+ * left unreferenced, so there is nothing to fall back to again.
+ *
+ * Consumers must therefore treat null as "not yet known" and render that,
+ * which `LiveGate` and `HistoryGate` do.
+ */
 export interface DashboardData {
   volSurface: any;
   greeksComparison: any;
@@ -20,11 +32,26 @@ type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 interface LiveState {
   data: DashboardData;
   status: ConnectionStatus;
-  spot: number;
+  /** Null until the first capture; callers must not print it as a number. */
+  spot: number | null;
   underlying: string;
   lastUpdate: number | null;
   isLive: boolean;
 }
+
+const NO_DATA: DashboardData = {
+  volSurface: null,
+  greeksComparison: null,
+  scenarioGrid: null,
+  pnlExplain: null,
+  higherOrderGreeks: null,
+  optionChain: null,
+  essviCalibration: null,
+  backtestEquity: null,
+  vrpSignal: null,
+  riskDashboard: null,
+  desk: null,
+};
 
 function generateClientId(): string {
   return `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -35,13 +62,9 @@ export function useLiveData(): LiveState & {
   requestSnapshot: () => void;
 } {
   const [state, setState] = useState<LiveState>({
-    // `desk: null` rather than a demo desk: there is no honest stand-in for
-    // "what the desk traded", and demo.json is the file this codebase
-    // deleted its fabricated series from. Until the backend answers, the
-    // panel reports that it has heard nothing.
-    data: { ...(demoData as Omit<DashboardData, "desk">), desk: null },
+    data: NO_DATA,
     status: "disconnected",
-    spot: demoData.volSurface.spot,
+    spot: null,
     underlying: "NIFTY",
     lastUpdate: null,
     isLive: false,
@@ -77,9 +100,10 @@ export function useLiveData(): LiveState & {
             ...prev,
             data: {
               ...prev.data,
-              // Only keys listed here can ever replace the bundled demo
-              // baseline. A key the backend computes but that is missing from
-              // this list renders demo data forever, silently.
+              // Only keys listed here are ever adopted from a broadcast. A
+              // key the backend computes but that is missing from this list
+              // stays null forever, so its panel reports "waiting for the
+              // first captured chain" even while the data is arriving.
               ...(d.volSurface && { volSurface: d.volSurface }),
               ...(d.greeksComparison && { greeksComparison: d.greeksComparison }),
               ...(d.optionChain && { optionChain: d.optionChain }),
@@ -92,9 +116,9 @@ export function useLiveData(): LiveState & {
                 higherOrderGreeks: d.higherOrderGreeks,
               }),
               // History-backed panels. These arrive with hasHistory:false and
-              // a reason until enough days are captured, and that state must
-              // replace the demo baseline too — otherwise a fresh install
-              // shows a fabricated equity curve instead of "still collecting".
+              // a reason until enough days are captured; that state is real
+              // information and must be adopted, so HistoryGate can report
+              // how many days are still missing rather than how many are.
               ...(d.vrpSignal && { vrpSignal: d.vrpSignal }),
               ...(d.backtestEquity && { backtestEquity: d.backtestEquity }),
               ...(d.pnlExplain && { pnlExplain: d.pnlExplain }),

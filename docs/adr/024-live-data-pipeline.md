@@ -45,3 +45,30 @@ Enforcing tests: `tests/unit/test_live_analytics.py`, `tests/unit/test_live_pipe
 ### Risks
 - `WebSocketManager` per-client state must be cleaned on disconnect to avoid memory leaks —
   addressed by `finally` block in the WebSocket route handler.
+
+## Amendment (2026-09-03)
+The demo-data baseline described above is withdrawn; `frontend/src/data/demo.json` is
+deleted. Three claims in the original text no longer hold:
+
+- *"Graceful degradation — app works fully on demo data when backend is down."* The demo
+  chain was priced off a 20,000 NIFTY. Because the backend broadcasts nothing until the
+  first capture completes, this was not a brief flash before real data arrived — it was
+  the steady state whenever the market was shut, which is most of the day. It was observed
+  in production showing a 20,000 spot against a real level of 23,873.
+- *"Header shows connection status (Live/Demo Mode)."* The `DataSource` union driving that
+  badge was later removed as unused, so the disclosure went with it and the sample chain
+  rendered indistinguishably from live data. That is the failure mode phases 1-3 were spent
+  eliminating elsewhere, and the reason their fabricated series were deleted rather than
+  left as fallbacks.
+- *"Five tabs remain demo until their backend computations are built."* All ten now have
+  real data paths.
+
+Replacement: every field of `DashboardData` starts `null`, and market panels render
+through `LiveGate`, which reports that no chain has been captured yet and why (not
+connected / connecting / outside market hours). This mirrors `HistoryGate` for the
+replay-backed panels; the two differ only in what is missing. The header spot shows an em
+dash rather than a number before the first capture. Deleting the file rather than leaving
+it unreferenced is deliberate: a fallback that exists will eventually be shown.
+
+The pipeline decision itself — capture callback → analytics → WebSocket broadcast — is
+unchanged.

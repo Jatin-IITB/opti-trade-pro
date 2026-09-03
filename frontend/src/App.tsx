@@ -33,6 +33,7 @@ import { PositionSignals } from "./components/PositionSignals";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
 import { DeskPanel } from "./components/DeskPanel";
 import { HistoryGate } from "./components/HistoryGate";
+import { LiveGate } from "./components/LiveGate";
 import { usePortfolio } from "./hooks/usePortfolio";
 import { useLiveData } from "./hooks/useLiveData";
 
@@ -79,18 +80,21 @@ class ErrorBoundary extends Component<
  * Two kinds: panels describing your *broker account* (Risk, Scenarios, P&L
  * Explain, Positions) and panels describing the *market*, computed by the
  * quant engines from a captured option chain (Vol Surface, eSSVI, Chain,
- * Greeks, Higher-Order, VRP, Backtest). Market panels fall back to bundled
- * demo data until the first capture cycle completes; account panels report
- * that they have no book rather than inventing one.
+ * Greeks, Higher-Order, VRP, Backtest). Neither kind invents data: account
+ * panels report that they have no book, and market panels report that no
+ * chain has been captured yet.
  *
  * There is no third, "synthetic" kind any more — every panel has a real data
- * path. The three needing days of history (VRP, Backtest, P&L Explain) report
- * what they are still missing through `HistoryGate` instead of rendering a
- * stand-in, and their fabricated demo series were deleted outright so there
- * is nothing left to fall back to.
+ * path, and none has a fallback. Two gates express the two ways data can be
+ * missing: `LiveGate` waits for the first captured chain, `HistoryGate` waits
+ * for enough stored days and reports how many are still needed.
  *
- * This was a `DataSource` union on each nav item, but its only consumer was
- * the "Sim" badge, which is gone. Kept as prose rather than an unread field.
+ * `demo.json` is deleted, not merely unreferenced. It previously seeded the
+ * market panels with a chain priced off a 20,000 NIFTY, and because the
+ * backend broadcasts nothing before the first capture, that was the steady
+ * state whenever the market was shut — rendered identically to live data,
+ * with no badge to say otherwise. (The `DataSource` union that once drove a
+ * "Sim" badge had been removed as unused, taking the disclosure with it.)
  */
 interface NavItem {
   id: string;
@@ -267,9 +271,17 @@ export default function App() {
           <div className="flex items-center gap-4 text-xs text-slate-400">
             <span>
               {live.underlying}{" "}
-              <span className="text-emerald-400 font-mono">
-                {live.spot.toLocaleString()}
-              </span>
+              {live.spot === null ? (
+                // Never a number before the first capture: this header sat
+                // next to a bundled 20,000 NIFTY and read as a live quote.
+                <span className="font-mono text-slate-500" title="No chain captured yet">
+                  —
+                </span>
+              ) : (
+                <span className="text-emerald-400 font-mono">
+                  {live.spot.toLocaleString()}
+                </span>
+              )}
             </span>
             {live.lastUpdate && (
               <span className="text-slate-500">
@@ -309,17 +321,44 @@ export default function App() {
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-[1200px] mx-auto px-6 py-6">
             <ErrorBoundary>
+              {/* Market panels are computed from a captured chain, so each
+                  waits for the first capture rather than rendering the
+                  bundled sample chain that used to stand in for one. */}
               {activeTab === "surface" && (
-                <VolSurface data={data.volSurface} />
+                <LiveGate
+                  data={data.volSurface}
+                  title="Volatility Surface"
+                  status={live.status}
+                >
+                  <VolSurface data={data.volSurface} />
+                </LiveGate>
               )}
               {activeTab === "essvi" && (
-                <EssviCalibration data={data.essviCalibration} />
+                <LiveGate
+                  data={data.essviCalibration}
+                  title="eSSVI Calibration"
+                  status={live.status}
+                >
+                  <EssviCalibration data={data.essviCalibration} />
+                </LiveGate>
               )}
               {activeTab === "greeks" && (
-                <GreeksBook data={data.greeksComparison} />
+                <LiveGate
+                  data={data.greeksComparison}
+                  title="Greeks Book"
+                  status={live.status}
+                >
+                  <GreeksBook data={data.greeksComparison} />
+                </LiveGate>
               )}
               {activeTab === "scenarios" && (
-                <ScenarioHeatmap data={data.scenarioGrid} />
+                <LiveGate
+                  data={data.scenarioGrid}
+                  title="Scenario Analysis"
+                  status={live.status}
+                >
+                  <ScenarioHeatmap data={data.scenarioGrid} />
+                </LiveGate>
               )}
               {activeTab === "pnl" && (
                 <HistoryGate data={data.pnlExplain} title="P&L Attribution">
@@ -327,10 +366,22 @@ export default function App() {
                 </HistoryGate>
               )}
               {activeTab === "higher" && (
-                <HigherOrderGreeks data={data.higherOrderGreeks} />
+                <LiveGate
+                  data={data.higherOrderGreeks}
+                  title="Higher-Order Greeks"
+                  status={live.status}
+                >
+                  <HigherOrderGreeks data={data.higherOrderGreeks} />
+                </LiveGate>
               )}
               {activeTab === "chain" && (
-                <OptionChain data={data.optionChain} />
+                <LiveGate
+                  data={data.optionChain}
+                  title="Option Chain"
+                  status={live.status}
+                >
+                  <OptionChain data={data.optionChain} />
+                </LiveGate>
               )}
               {activeTab === "backtest" && (
                 <HistoryGate
@@ -346,7 +397,13 @@ export default function App() {
                 </HistoryGate>
               )}
               {activeTab === "risk" && (
-                <RiskDashboard data={data.riskDashboard} />
+                <LiveGate
+                  data={data.riskDashboard}
+                  title="Risk Dashboard"
+                  status={live.status}
+                >
+                  <RiskDashboard data={data.riskDashboard} />
+                </LiveGate>
               )}
               {/* No HistoryGate around the whole panel: the kill switch must
                   stay reachable on a desk that has never run, so the gate
