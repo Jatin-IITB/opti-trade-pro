@@ -12,10 +12,13 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from optitrade.core.types import Portfolio
 
 from ..utils.exceptions import AuthError
+from .book_pricing import price_book
+from .book_snapshot_store import BookSnapshotStore, snapshot_from_priced_book
 from .live_analytics import BookContext
 from .portfolio_client import (
     UpstoxFunds,
@@ -36,6 +39,9 @@ class PortfolioSyncConfig:
     include_holdings: bool = True
     include_orders: bool = True
     include_funds: bool = True
+    #: UTC days of book snapshots kept on disk. Only the last two end-of-day
+    #: records feed the P&L panel; the rest is a short forensic window.
+    book_retention_days: int = 30
 
 
 @dataclass
@@ -64,6 +70,7 @@ class PortfolioSyncService:
         config: PortfolioSyncConfig = PortfolioSyncConfig(),
         spot_fn: Callable[[], float | None] | None = None,
         now_fn: Callable[[], float] = time.time,
+        book_store: BookSnapshotStore | None = None,
     ) -> None:
         """``spot_fn`` supplies the live underlying level.
 
@@ -74,12 +81,18 @@ class PortfolioSyncService:
         ``now_fn`` is injectable so tests can pin the clock: expiry filtering
         is time-dependent, and a fixture's expiry date would otherwise silently
         go stale (CLAUDE.md: no wall-clock dependence in tests).
+
+        ``book_store`` persists each priced book. Optional: without it the
+        sync works exactly as before and the P&L explain panel reports that
+        it has no history, rather than inventing one.
         """
         self._client = client
         self._ws_manager = ws_manager
         self._config = config
         self._spot_fn = spot_fn
         self._now_fn = now_fn
+        self._book_store = book_store
+        self._last_prune_date: str | None = None
 
         self._latest_portfolio: Portfolio | None = None
         self._latest_positions: list[UpstoxPosition] = []
@@ -163,6 +176,11 @@ class PortfolioSyncService:
             self._last_error = (
                 f"Partial sync: {', '.join(degraded)} unavailable" if degraded else None
             )
+            # Off-thread: price_book inverts an IV per leg (~2.6ms each) and
+            # then writes JSON, so a 100-leg book would stall the event loop
+            # for a quarter of a second every minute — no WebSocket frames, no
+            # HTTP served, no capture callback for that whole window.
+            await asyncio.to_thread(self._persist_book_snapshot)
             payload = self._build_broadcast_payload(positions, portfolio)
             n_sent = await self._ws_manager.send_portfolio_update(payload)
             logger.info(
@@ -184,6 +202,54 @@ class PortfolioSyncService:
             self._failure_count += 1
             self._last_error = f"{type(exc).__name__}: {exc}"
             logger.exception("Portfolio sync failed (attempt %d)", self._failure_count)
+
+    def _persist_book_snapshot(self) -> None:
+        """Record the priced book so a later day's P&L can be explained.
+
+        Best-effort by design: the P&L explain tab is a reporting feature, and
+        a disk error must not fail a sync that has already fetched a good
+        book. A gap in the history shows up as a missing day in the explain
+        panel, which is visible, rather than as a lost sync, which is not.
+        """
+        if self._book_store is None:
+            return
+        book = self.get_book_context()
+        if book is None:
+            return
+        spot = self._latest_spot
+        if spot is None:
+            # Without a spot there is no IV to invert and no Greeks to store;
+            # a snapshot priced at a guessed spot would poison the explain.
+            logger.debug("No spot available; skipping book snapshot")
+            return
+        try:
+            priced = price_book(book.portfolio, book.marks, spot)
+            if not priced.legs:
+                logger.debug("No legs priced; skipping book snapshot")
+                return
+            self._book_store.write(
+                snapshot_from_priced_book(priced, timestamp=self._now_fn(), equity=book.equity)
+            )
+            self._prune_book_snapshots()
+        except Exception:
+            logger.exception("Failed to persist book snapshot; P&L explain will show a gap")
+
+    def _prune_book_snapshots(self) -> None:
+        """Enforce retention once per UTC day.
+
+        A 60s sync writes 1,440 files a day, so an unpruned store reaches
+        gigabytes and hundreds of thousands of inodes within a year while the
+        panel only ever reads the last two end-of-day records. Pruning is
+        attempted once per day rather than per sync because it stats every
+        date directory.
+        """
+        if self._book_store is None or self._config.book_retention_days < 1:
+            return
+        today = datetime.fromtimestamp(self._now_fn(), tz=UTC).strftime("%Y-%m-%d")
+        if today == self._last_prune_date:
+            return
+        self._last_prune_date = today
+        self._book_store.prune(self._config.book_retention_days)
 
     def _build_broadcast_payload(
         self, positions: list[UpstoxPosition], portfolio: Portfolio

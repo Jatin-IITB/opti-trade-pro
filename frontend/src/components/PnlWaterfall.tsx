@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
+import { rupees, type TooltipValue } from "../lib/chartFormat";
 
 interface Bucket {
   name: string;
@@ -18,9 +19,64 @@ interface Bucket {
 interface Props {
   data: {
     date: string;
+    previousDate?: string;
     totalPnl: number;
     buckets: Bucket[];
+    explainedFraction?: number;
+    coverage?: number;
+    legsCompared?: number;
+    legsChanged?: number;
+    gammaMarkedAgainstRealizedVariance?: boolean;
   };
+}
+
+/**
+ * The caveats that keep the headline honest.
+ *
+ * `explainedFraction` alone is misleading: it is the share of the *compared*
+ * P&L that the buckets account for, and `coverage` is the share of the book
+ * that was comparable at all. 98% explained of a fifth of the book is not a
+ * 98% explanation. Legs that were traded during the period are excluded from
+ * the attribution entirely — Greeks describe a held position, not the cash
+ * flow of trading it — so `legsChanged` has to be visible too.
+ */
+function Caveats({ data }: Props) {
+  const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+  const parts: string[] = [];
+  if (data.explainedFraction !== undefined) {
+    parts.push(`${pct(data.explainedFraction)} explained by the buckets`);
+  }
+  if (data.coverage !== undefined && data.legsCompared !== undefined) {
+    parts.push(
+      `covering ${pct(data.coverage)} of the book (${data.legsCompared} leg${
+        data.legsCompared === 1 ? "" : "s"
+      })`,
+    );
+  }
+  if (data.legsChanged) {
+    parts.push(
+      `${data.legsChanged} leg${data.legsChanged === 1 ? "" : "s"} traded ` +
+        `during the period and ${
+          data.legsChanged === 1 ? "is" : "are"
+        } excluded`,
+    );
+  }
+  if (!parts.length) return null;
+
+  const partial = (data.coverage ?? 1) < 0.999 || Boolean(data.legsChanged);
+  return (
+    <div
+      className={`rounded-lg border px-4 py-3 text-xs leading-relaxed ${
+        partial
+          ? "border-amber-700/40 bg-amber-950/30 text-amber-200/80"
+          : "border-slate-700/50 bg-slate-800/30 text-slate-400"
+      }`}
+    >
+      {parts.join("; ")}.
+      {data.gammaMarkedAgainstRealizedVariance === false &&
+        " Gamma is marked against the single close-to-close move; no intraday path was recorded."}
+    </div>
+  );
 }
 
 export function PnlWaterfall({ data }: Props) {
@@ -46,12 +102,14 @@ export function PnlWaterfall({ data }: Props) {
             P&amp;L Attribution
           </h2>
           <p className="text-sm text-slate-400">
-            Taylor decomposition: theta + delta + gamma-vs-RV + vega (per PCA
-            factor) + vanna/volga + residual
+            Taylor decomposition: theta + delta + gamma-vs-RV + vega +
+            vanna/volga + residual
           </p>
         </div>
         <div className="text-right">
-          <div className="text-xs text-slate-400">{data.date}</div>
+          <div className="text-xs text-slate-400">
+            {data.previousDate ? `${data.previousDate} → ${data.date}` : data.date}
+          </div>
           <div
             className={`text-2xl font-mono ${
               data.totalPnl >= 0 ? "text-emerald-400" : "text-red-400"
@@ -62,6 +120,8 @@ export function PnlWaterfall({ data }: Props) {
           </div>
         </div>
       </div>
+
+      <Caveats data={data} />
 
       <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6">
         <ResponsiveContainer width="100%" height={400}>
@@ -89,10 +149,7 @@ export function PnlWaterfall({ data }: Props) {
                 color: "#f1f5f9",
                 fontSize: 13,
               }}
-              formatter={(value: number) => [
-                `₹${value.toLocaleString()}`,
-                "P&L",
-              ]}
+              formatter={(value: TooltipValue) => [rupees(value), "P&L"]}
             />
             <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
             <Bar dataKey="value" radius={[4, 4, 0, 0]}>

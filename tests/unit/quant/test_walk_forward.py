@@ -22,6 +22,7 @@ from optitrade.backtest import (
     SyntheticVRPMarket,
     annualized_sharpe,
     max_drawdown,
+    min_days_for_walk_forward,
     run_backtest,
     run_walk_forward,
     turnover,
@@ -188,6 +189,55 @@ class TestWalkForward:
         second = self.run_wf()
         np.testing.assert_array_equal(first.oos_daily_pnl, second.oos_daily_pnl)
         assert first.deflated_sharpe == second.deflated_sharpe
+
+
+class TestMinDaysForWalkForward:
+    """``min_days_for_walk_forward`` must agree with the harness it predicts.
+
+    A live capture accumulating history asks "how many more days?"; answering
+    by catching the ``ValueError`` would cost a full replay build. These tests
+    pin the prediction to the real fold arithmetic so the two cannot drift.
+    """
+
+    GRID = (VRPConfig(entry_vrp_min=0.04),)
+    SETTINGS = tuple(
+        (n_folds, train_frac) for n_folds in (1, 2, 3, 4, 6) for train_frac in (0.5, 0.6, 0.75, 0.8)
+    )
+
+    @pytest.mark.parametrize(("n_folds", "train_frac"), SETTINGS)
+    def test_min_days_matches_run_walk_forward(self, n_folds, train_frac):
+        """At the predicted count the harness runs; one day fewer it raises."""
+        predicted = min_days_for_walk_forward(n_folds, train_frac)
+        days = list(make_market(vrp=0.06))
+        assert predicted <= len(days), "widen the synthetic market for this setting"
+
+        run_walk_forward(
+            free_strategy, self.GRID, days[:predicted], free_config(), n_folds, train_frac
+        )
+        with pytest.raises(ValueError, match="too short"):
+            run_walk_forward(
+                free_strategy,
+                self.GRID,
+                days[: predicted - 1],
+                free_config(),
+                n_folds,
+                train_frac,
+            )
+
+    def test_default_settings_need_eleven_days(self):
+        """Pins the number the frontend shows as "N days needed"."""
+        assert min_days_for_walk_forward() == 11
+        assert min_days_for_walk_forward(n_folds=4, train_frac=0.6) == 11
+
+    def test_more_folds_need_more_days(self):
+        assert min_days_for_walk_forward(2, 0.6) < min_days_for_walk_forward(8, 0.6)
+
+    def test_rejects_the_same_arguments_run_walk_forward_rejects(self):
+        with pytest.raises(ValueError, match="n_folds"):
+            min_days_for_walk_forward(0, 0.6)
+        for bad in (0.0, 1.0, -0.1):
+            with pytest.raises(ValueError, match="train_frac"):
+                min_days_for_walk_forward(4, bad)
 
 
 class TestMetricGuards:

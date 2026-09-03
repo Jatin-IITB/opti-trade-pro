@@ -86,6 +86,13 @@ export function useLiveData(): LiveState & {
               ...(d.higherOrderGreeks && {
                 higherOrderGreeks: d.higherOrderGreeks,
               }),
+              // History-backed panels. These arrive with hasHistory:false and
+              // a reason until enough days are captured, and that state must
+              // replace the demo baseline too — otherwise a fresh install
+              // shows a fabricated equity curve instead of "still collecting".
+              ...(d.vrpSignal && { vrpSignal: d.vrpSignal }),
+              ...(d.backtestEquity && { backtestEquity: d.backtestEquity }),
+              ...(d.pnlExplain && { pnlExplain: d.pnlExplain }),
             },
             spot: d.spot ?? prev.spot,
             underlying: d.underlying ?? prev.underlying,

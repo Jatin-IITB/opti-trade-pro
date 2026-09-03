@@ -343,7 +343,6 @@ function ConnectorCard({
   const isConnected = connector.status === "connected";
   const isConfigured = connector.status === "configured";
   const isComingSoon = connector.status === "coming_soon";
-  const needsSetup = connector.status === "disconnected";
 
   return (
     <div

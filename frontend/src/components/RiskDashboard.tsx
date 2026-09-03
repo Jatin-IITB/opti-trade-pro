@@ -10,6 +10,7 @@ import {
   Line,
   Legend,
 } from "recharts";
+import { percent, toNumber, type TooltipValue } from "../lib/chartFormat";
 
 /**
  * Nullable fields have no honest source yet and must not render as zero:
@@ -219,9 +220,9 @@ export function RiskDashboard({ data }: Props) {
                   color: "#f1f5f9",
                   fontSize: 11,
                 }}
-                formatter={(value: number, name: string) => [
-                  `${(value * 100).toFixed(1)}%`,
-                  name.replace("Util", ""),
+                formatter={(value: TooltipValue, name) => [
+                  percent(toNumber(value) * 100, 1),
+                  String(name).replace("Util", ""),
                 ]}
               />
               <Legend
@@ -297,7 +298,7 @@ export function RiskDashboard({ data }: Props) {
                   color: "#f1f5f9",
                   fontSize: 12,
                 }}
-                formatter={(value: number) => [value, "Count"]}
+                formatter={(value: TooltipValue) => [toNumber(value), "Count"]}
               />
               <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={24}>
                 {verdictData.map((entry) => (

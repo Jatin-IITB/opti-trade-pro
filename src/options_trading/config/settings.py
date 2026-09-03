@@ -7,6 +7,7 @@ Production-grade application settings for Options Trading.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -171,6 +172,129 @@ class Settings(BaseSettings):
         ge=0,
         description="Which expiry to auto-capture; 0 = nearest tradable expiry",
     )
+    # -------------------------------------------------------------------------
+    # History analytics (VRP signal, backtest, P&L explain)
+    # -------------------------------------------------------------------------
+    # These panels replay the captured Parquet history rather than the live
+    # chain, refitting a vol surface per stored day. That is orders of
+    # magnitude more work than the per-tick builders, so they run on their own
+    # cadence with a cached result and never on the capture tick.
+    book_snapshot_store_path: str = Field(
+        default="runtime_data/book_snapshots",
+        description=(
+            "Root directory for persisted book snapshots. Feeds P&L explain, "
+            "which needs the book as it stood at the start of a period. "
+            "Contains position detail, so it lives under gitignored runtime_data."
+        ),
+    )
+    history_refresh_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        description=(
+            "Minimum seconds between history-analytics recomputes. The result "
+            "is daily-resolution, so refreshing faster only burns CPU."
+        ),
+    )
+    history_surface_model: Literal["spline", "essvi"] = Field(
+        default="spline",
+        description=(
+            "Surface fitted per replayed day. 'spline' is ~3x faster than "
+            "'essvi' and the VRP signal only reads the ATM vol, where the two "
+            "agree closely; 'essvi' buys arbitrage-free wings the ATM-only "
+            "features do not use."
+        ),
+    )
+    history_rv_window: int = Field(
+        default=21,
+        ge=3,
+        description="Trailing EOD closes fed to the close-to-close realized-vol estimator",
+    )
+    history_tenor_days: int = Field(
+        default=30,
+        ge=1,
+        description="Option tenor (calendar days, ACT/365) for the ATM IV and skew features",
+    )
+    history_walk_forward_folds: int = Field(
+        default=4,
+        ge=1,
+        description="Rolling walk-forward folds; more folds need more captured days",
+    )
+    history_walk_forward_train_frac: float = Field(
+        default=0.6,
+        gt=0.0,
+        lt=1.0,
+        description="Fraction of each fold's window used to select the config",
+    )
+    history_backtest_initial_equity: float = Field(
+        default=1_000_000.0,
+        gt=0,
+        description="Starting cash for the replayed VRP backtest",
+    )
+    history_backtest_lot_size: int = Field(
+        default=75,
+        ge=1,
+        description="Lot size the replayed strategy trades (NIFTY F&O lot)",
+    )
+    history_vrp_entry_grid: tuple[float, ...] = Field(
+        default=(0.02, 0.03, 0.05),
+        description=(
+            "entry_vrp_min values searched per walk-forward fold. Every value "
+            "counts as a trial in the deflated Sharpe, so a wider grid is "
+            "penalised, not rewarded."
+        ),
+    )
+    # The replayed backtest is a separate hypothetical account, so it gets its
+    # own risk limits rather than the live book's: reusing risk_max_abs_* would
+    # apply caps sized for the user's real positions to a 10-lakh paper
+    # account. The caps are derived from equity as risk budgets (see
+    # backtest_risk_limits) so they scale with initial_equity instead of being
+    # magic numbers that silently forbid every trade.
+    history_vega_budget_frac: float = Field(
+        default=0.005,
+        gt=0,
+        description=(
+            "Max fraction of backtest equity the book may lose to a "
+            "1-vol-point move. Sized so the replayed strategy can actually "
+            "trade: test_permits_the_strategy_it_is_meant_to_run pins that."
+        ),
+    )
+    history_delta_budget_frac: float = Field(
+        default=0.02,
+        gt=0,
+        description="Max fraction of backtest equity exposed to a 1% spot move",
+    )
+    history_gamma_budget_frac: float = Field(
+        default=0.005,
+        gt=0,
+        description="Max fraction of backtest equity in the second-order term of a 1% spot move",
+    )
+    history_backtest_max_drawdown: float = Field(
+        default=0.25,
+        gt=0,
+        le=1.0,
+        description="Drawdown kill-switch for the replayed backtest account",
+    )
+    history_backtest_max_concentration: float = Field(
+        default=1.0,
+        gt=0,
+        le=1.0,
+        description=(
+            "Concentration cap for the replayed backtest. A single-strategy "
+            "straddle book is ~50% concentrated per leg by construction, so a "
+            "portfolio-level cap below that forbids the strategy outright."
+        ),
+    )
+    history_band_proportional_cost: float = Field(
+        default=5e-4,
+        ge=0,
+        description="Hedge cost as a fraction of traded value in the Whalley-Wilmott band",
+    )
+    history_band_risk_aversion: float = Field(
+        default=1.0,
+        gt=0,
+        description="CARA risk aversion in the Whalley-Wilmott band; higher hedges tighter",
+    )
+
     # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------

@@ -168,7 +168,9 @@ async def websocket_endpoint(
                         await websocket.send_json(
                             {
                                 "type": "dashboard_update",
-                                "data": snapshot.to_wire_dict(),
+                                # Same builder as the push path, so a reconnecting
+                                # client cannot receive a payload missing panels.
+                                "data": await pipeline.build_wire_dict(snapshot),
                                 "timestamp": datetime.now().isoformat(),
                             }
                         )
@@ -225,7 +227,7 @@ async def get_live_snapshot(request: Request) -> Any:
     snapshot = pipeline.get_latest_snapshot()
     if snapshot is None:
         return JSONResponse(status_code=204, content=None)
-    return snapshot.to_wire_dict()
+    return await pipeline.build_wire_dict(snapshot)
 
 
 @router.get("/health")

@@ -30,6 +30,7 @@ import { HoldingsTable } from "./components/HoldingsTable";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
+import { HistoryGate } from "./components/HistoryGate";
 import { usePortfolio } from "./hooks/usePortfolio";
 import { useLiveData } from "./hooks/useLiveData";
 
@@ -77,11 +78,13 @@ class ErrorBoundary extends Component<
  * - `market`   — computed by the quant engines from a captured live option
  *                chain. Falls back to bundled demo data until the first
  *                capture cycle completes.
- * - `synthetic`— genuine engine output over *simulated* inputs. There is no
- *                live data path for these yet, so nothing here describes your
- *                book or the current market.
+ *
+ * There is no longer a `synthetic` source: every panel now has a real data
+ * path. The three that need days of history (VRP, backtest, P&L explain)
+ * report how much they are still missing through `HistoryGate` rather than
+ * rendering a simulated stand-in.
  */
-type DataSource = "account" | "market" | "synthetic";
+type DataSource = "account" | "market";
 
 interface NavItem {
   id: string;
@@ -120,7 +123,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "P&L & Scenarios",
     items: [
-      { id: "pnl", label: "P&L Explain", icon: TrendingUp, source: "synthetic" },
+      { id: "pnl", label: "P&L Explain", icon: TrendingUp, source: "account" },
       {
         id: "scenarios",
         label: "Scenarios",
@@ -136,9 +139,9 @@ const NAV_GROUPS: NavGroup[] = [
         id: "backtest",
         label: "Backtest",
         icon: LineChart,
-        source: "synthetic",
+        source: "market",
       },
-      { id: "vrp", label: "VRP Signal", icon: Activity, source: "synthetic" },
+      { id: "vrp", label: "VRP Signal", icon: Activity, source: "market" },
     ],
   },
   {
@@ -149,32 +152,6 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
 ];
-
-/** Why a given panel cannot yet show real numbers. */
-const SYNTHETIC_REASON: Record<string, string> = {
-  pnl: "P&L attribution needs two consecutive daily portfolio snapshots plus the vol surface between them. Snapshot history is not yet accumulating.",
-  backtest:
-    "This equity curve is a seeded random walk, not a strategy result. The real walk-forward engine with deflated Sharpe exists but is not connected to this panel.",
-  vrp: "The IV and realised-vol series are simulated. Real VRP needs a persisted ATM-IV time series and realised vol from spot history.",
-};
-
-function SyntheticNotice({ tabId }: { tabId: string }) {
-  const reason = SYNTHETIC_REASON[tabId];
-  if (!reason) return null;
-  return (
-    <div className="mb-4 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3">
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
-          Synthetic
-        </span>
-        <p className="text-xs leading-relaxed text-amber-200/80">
-          Engine output on <strong>simulated inputs</strong> — this does not
-          reflect your account or current market. {reason}
-        </p>
-      </div>
-    </div>
-  );
-}
 
 type TabId = string;
 
@@ -235,7 +212,7 @@ function SidebarGroup({
       </button>
       {open && (
         <div className="space-y-0.5 pb-2">
-          {group.items.map(({ id, label, icon: Icon, source }) => (
+          {group.items.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => onSelect(id)}
@@ -247,14 +224,6 @@ function SidebarGroup({
             >
               <Icon size={15} className="shrink-0" />
               <span className="flex-1 text-left">{label}</span>
-              {source === "synthetic" && (
-                <span
-                  title="Synthetic — engine output on simulated inputs, not your account"
-                  className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-400/90"
-                >
-                  Sim
-                </span>
-              )}
             </button>
           ))}
         </div>
@@ -336,7 +305,6 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-[1200px] mx-auto px-6 py-6">
-            <SyntheticNotice tabId={activeTab} />
             <ErrorBoundary>
               {activeTab === "surface" && (
                 <VolSurface data={data.volSurface} />
@@ -350,7 +318,11 @@ export default function App() {
               {activeTab === "scenarios" && (
                 <ScenarioHeatmap data={data.scenarioGrid} />
               )}
-              {activeTab === "pnl" && <PnlWaterfall data={data.pnlExplain} />}
+              {activeTab === "pnl" && (
+                <HistoryGate data={data.pnlExplain} title="P&L Attribution">
+                  <PnlWaterfall data={data.pnlExplain} />
+                </HistoryGate>
+              )}
               {activeTab === "higher" && (
                 <HigherOrderGreeks data={data.higherOrderGreeks} />
               )}
@@ -358,9 +330,18 @@ export default function App() {
                 <OptionChain data={data.optionChain} />
               )}
               {activeTab === "backtest" && (
-                <BacktestEquity data={data.backtestEquity} />
+                <HistoryGate
+                  data={data.backtestEquity}
+                  title="Walk-Forward Backtest"
+                >
+                  <BacktestEquity data={data.backtestEquity} />
+                </HistoryGate>
               )}
-              {activeTab === "vrp" && <VrpSignal data={data.vrpSignal} />}
+              {activeTab === "vrp" && (
+                <HistoryGate data={data.vrpSignal} title="Variance Risk Premium">
+                  <VrpSignal data={data.vrpSignal} />
+                </HistoryGate>
+              )}
               {activeTab === "risk" && (
                 <RiskDashboard data={data.riskDashboard} />
               )}

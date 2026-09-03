@@ -17,6 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from optitrade.data import SnapshotStore
+
 from .api.routes.analytics import router as analytics_router
 from .api.routes.auth import router as auth_router
 from .api.routes.backtesting import router as backtesting_router
@@ -28,8 +30,10 @@ from .api.routes.portfolio import router as portfolio_router
 from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
 from .services.auth_service import AuthService
+from .services.book_snapshot_store import BookSnapshotStore
 from .services.capture_control import autostart_if_configured
 from .services.dashboard_service import DashboardService
+from .services.history_analytics import HistoryAnalytics, history_config_from_settings
 from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
 from .services.portfolio_client import UpstoxPortfolioClient
@@ -65,10 +69,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         svc = getattr(app.state, "portfolio_sync", None)
         return svc.get_book_context() if svc is not None else None
 
+    # Replay-backed panels (VRP signal, backtest). Reads the same Parquet
+    # store the capture schedule writes, so it needs no broker connection —
+    # it works offline and reports how much history it is still missing.
+    book_store = BookSnapshotStore(Path(settings.book_snapshot_store_path))
+    app.state.book_snapshot_store = book_store
+
+    history_analytics = HistoryAnalytics(
+        SnapshotStore(Path(settings.snapshot_store_path)),
+        history_config_from_settings(),
+        book_store,
+    )
+    app.state.history_analytics = history_analytics
+
     app.state.live_pipeline = LivePipelineService(
         ws_manager=websocket_manager,
         config=LivePipelineConfig(),
         book_fn=_current_book,
+        history=history_analytics,
     )
 
     logger.info(f"Environment: {settings.environment}")
@@ -122,6 +140,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ws_manager=websocket_manager,
             config=PortfolioSyncConfig(),
             spot_fn=app.state.live_pipeline.get_latest_spot,
+            # Each sync records the priced book; two end-of-day records are
+            # what the P&L explain panel decomposes.
+            book_store=book_store,
         )
         app.state.portfolio_sync = portfolio_sync
         app.state._portfolio_sync_task = asyncio.create_task(portfolio_sync.run())

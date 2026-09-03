@@ -14,6 +14,7 @@ from optitrade.backtest.walk_forward import (
     BacktestResult,
     FoldResult,
     WalkForwardResult,
+    min_days_for_walk_forward,
     run_backtest,
     run_walk_forward,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "annualized_sharpe",
     "deflated_sharpe_ratio",
     "max_drawdown",
+    "min_days_for_walk_forward",
     "run_backtest",
     "run_delta_hedge_sim",
     "run_walk_forward",
