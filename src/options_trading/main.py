@@ -38,7 +38,6 @@ from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
 from .services.portfolio_client import UpstoxPortfolioClient
 from .services.portfolio_sync_service import PortfolioSyncConfig, PortfolioSyncService
-from .services.strategy_service import StrategyService
 from .services.token_provider import get_token_provider
 from .services.websocket_manager import WebSocketManager
 from .utils.cache import AsyncCache
@@ -126,11 +125,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         logger.info("📊 DashboardService initialized")
 
-        app.state.strategy_service = StrategyService(
-            market_data_service=app.state.market_data_service
-        )
-        logger.info("📈 StrategyService initialized")
-
         # Portfolio sync resolves a fresh token per request via the provider,
         # so it survives the daily Upstox token expiry. spot_fn comes from the
         # live pipeline so portfolio Greeks price against real spot.
@@ -160,7 +154,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_manager = None
         app.state.market_data_service = None
         app.state.dashboard_service = None
-        app.state.strategy_service = None
         app.state.portfolio_sync = None
 
     yield

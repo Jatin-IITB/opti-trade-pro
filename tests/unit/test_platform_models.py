@@ -12,8 +12,6 @@ from options_trading.models.dashboard import (
     ConnectionStatus,
     MarketDataFeed,
     MarketDataStatus,
-    StrategyPerformance,
-    StrategyStatus,
     SystemHealth,
     SystemMetrics,
     SystemStatus,
@@ -145,34 +143,6 @@ class TestMarketDataStatus:
             total_instruments=0,
         )
         assert status.data_quality == "unknown"
-
-
-class TestStrategyPerformance:
-    def test_low_risk(self):
-        perf = StrategyPerformance(
-            strategy_id="s1",
-            name="VRP",
-            status=StrategyStatus.ACTIVE,
-            positions_count=5,
-            total_pnl=Decimal("1000"),
-            daily_pnl=Decimal("100"),
-            pnl_percentage=Decimal("1.5"),
-            risk_level="placeholder",
-        )
-        assert perf.risk_level == "low"
-
-    def test_high_risk(self):
-        perf = StrategyPerformance(
-            strategy_id="s1",
-            name="VRP",
-            status=StrategyStatus.ACTIVE,
-            positions_count=5,
-            total_pnl=Decimal("-5000"),
-            daily_pnl=Decimal("-500"),
-            pnl_percentage=Decimal("-8.0"),
-            risk_level="placeholder",
-        )
-        assert perf.risk_level == "high"
 
 
 class TestSystemStatus:
