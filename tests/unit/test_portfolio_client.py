@@ -21,7 +21,7 @@ from options_trading.services.portfolio_client import (
     _parse_trading_symbol,
     to_core_portfolio,
 )
-from options_trading.utils.exceptions import AuthError, RateLimitError
+from options_trading.utils.exceptions import APIError, AuthError, RateLimitError
 
 SAMPLE_POSITION_RAW = {
     "instrument_token": "NSE_FO|NIFTY2490724500CE",
@@ -416,6 +416,70 @@ class TestUpstoxPortfolioClient:
         orders = await client.fetch_orders()
         assert len(orders) == 1
         assert orders[0].order_id == "240830000001"
+
+
+class TestFetchFunds:
+    """Regression: fetch_funds crashed on an account with no F&O funds.
+
+    ``margin_utilization`` is None when the segment holds no account value —
+    the normal state for a user who has never allocated F&O margin. The
+    success-path log line multiplied it by 100 unconditionally, so the whole
+    fetch raised TypeError. Because the sync calls this inside its
+    degraded-fetch guard, it surfaced only as "funds unavailable" once a
+    minute while equity and margin stayed blank for good.
+
+    The property had tests; the method that formats it did not. This class
+    exercises the method, which is where the bug lived.
+    """
+
+    @staticmethod
+    def _respond(monkeypatch, payload: dict) -> None:
+        async def mock_get(self, url, **kwargs):
+            return httpx.Response(
+                200,
+                json={"status": "success", "data": payload},
+                request=httpx.Request("GET", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    @pytest.mark.asyncio
+    async def test_empty_segment_does_not_raise(self, monkeypatch):
+        """The exact shape returned for an account with no F&O funds."""
+        self._respond(monkeypatch, {"equity": {"used_margin": 0.0, "available_margin": 0.0}})
+
+        funds = await UpstoxPortfolioClient(access_token="tok").fetch_funds()
+
+        assert funds.margin_utilization is None
+        assert funds.total_equity == 0.0
+
+    @pytest.mark.asyncio
+    async def test_funded_segment_parses(self, monkeypatch):
+        self._respond(
+            monkeypatch, {"equity": {"used_margin": 45_000.0, "available_margin": 155_000.0}}
+        )
+
+        funds = await UpstoxPortfolioClient(access_token="tok").fetch_funds()
+
+        assert funds.margin_utilization == pytest.approx(0.225)
+
+    @pytest.mark.asyncio
+    async def test_margin_shortfall_is_reported_not_clamped(self, monkeypatch):
+        """Negative available margin is routine after an adverse move."""
+        self._respond(
+            monkeypatch, {"equity": {"used_margin": 100_000.0, "available_margin": -20_000.0}}
+        )
+
+        funds = await UpstoxPortfolioClient(access_token="tok").fetch_funds()
+
+        assert funds.margin_utilization > 1.0
+
+    @pytest.mark.asyncio
+    async def test_missing_segment_is_an_explicit_error(self, monkeypatch):
+        self._respond(monkeypatch, {"commodity": {}})
+
+        with pytest.raises(APIError, match="segment"):
+            await UpstoxPortfolioClient(access_token="tok").fetch_funds()
 
 
 class TestNullTolerantParsing:

@@ -441,9 +441,18 @@ class UpstoxPortfolioClient:
                 f"Upstox funds response has no {segment!r} segment (got: {sorted(data)})"
             )
         funds = _parse_funds(data[segment])
+        # margin_utilization is None when the segment holds no account value,
+        # which is the normal state for a user with no F&O funds allocated —
+        # not an error. Formatting it unconditionally raised TypeError here,
+        # and because fetch_funds is called inside the sync's degraded-fetch
+        # guard, the failure surfaced only as "funds unavailable" every cycle
+        # while equity and margin stayed permanently blank.
+        utilization = funds.margin_utilization
         logger.info(
-            "Fetched funds: %.1f%% margin utilization",
-            funds.margin_utilization * 100.0,
+            "Fetched funds: margin utilization %s",
+            "undefined (no account value in this segment)"
+            if utilization is None
+            else f"{utilization * 100.0:.1f}%",
         )
         return funds
 
