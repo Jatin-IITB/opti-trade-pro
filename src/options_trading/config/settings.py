@@ -72,8 +72,6 @@ class Settings(BaseSettings):
     )
     upstox_auth_url: str = Field(default="https://api.upstox.com/v2/login/authorization/token")
     upstox_profile_url: str = Field(default="https://api.upstox.com/v2/user/profile")
-    upstox_charges_url: str = Field(default="https://api.upstox.com/v2/charges/brokerage")
-    upstox_margin_url: str = Field(default="https://api.upstox.com/v2/charges/margin")
     upstox_oauth_dialog_url: str = Field(
         default="https://api-v2.upstox.com/login/authorization/dialog"
     )
@@ -82,7 +80,6 @@ class Settings(BaseSettings):
     upstox_option_chain_url: str = Field(default="https://api.upstox.com/v2/option/chain")
 
     default_api_version: str = Field(default="2.0")
-    default_accept_header: str = Field(default="application/json")
     default_content_type: str = Field(default="application/x-www-form-urlencoded")
 
     # -------------------------------------------------------------------------
@@ -118,11 +115,8 @@ class Settings(BaseSettings):
     # API Configuration
     # -------------------------------------------------------------------------
     api_timeout_seconds: int = Field(default=30)
-    api_retry_attempts: int = Field(default=3)
-    api_retry_delay_seconds: int = Field(default=2)
     max_concurrent_requests: int = Field(default=5)
     api_calls_per_minute: int = Field(default=50)
-    rate_limit_buffer_seconds: float = Field(default=1.2)
 
     # -------------------------------------------------------------------------
     # Database & Redis
@@ -323,8 +317,6 @@ class Settings(BaseSettings):
     rv_window_3min: int = Field(default=130)  # ≈ 1.5 trading days
     rv_buffer_weeks: int = Field(default=2)
     min_rv_coverage: float = Field(default=0.8)
-    FALLBACK_BROKERAGE_CHARGE: float = Field(default=82.89)
-    # FALLBACK_MARGIN_REQUIREMENT
     # -------------------------------------------------------------------------
     # Cache
     # -------------------------------------------------------------------------
