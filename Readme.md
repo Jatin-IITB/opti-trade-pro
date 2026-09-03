@@ -97,6 +97,7 @@ Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 | Research loop | `optitrade.research` | GridSearch + LLM agents propose → walk-forward evaluates → rank → journal; human approval gate | `test_research_loop.py`, `test_research_evaluator.py` |
 | MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py` |
 | Groundedness | `optitrade.audit` | Deterministic auditor: claim numbers must match journal citations | `test_groundedness.py` |
+| Analyst panel | `options_trading` | Surfaces the deterministic analysts over the desk journal, rendering the auditor's verdict and cited sequence numbers beside every claim. Partial coverage is reported: an analyst whose event type is absent is listed with what it needed, and the query-driven risk officer is named as deliberately off the roster | `test_analyst_service.py`, `test_analyst_routes.py` |
 
 ## Quick start
 

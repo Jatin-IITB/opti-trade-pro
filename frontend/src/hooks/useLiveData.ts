@@ -25,6 +25,7 @@ export interface DashboardData {
   vrpSignal: any;
   riskDashboard: any;
   desk: any;
+  analysts: any;
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -51,6 +52,7 @@ const NO_DATA: DashboardData = {
   vrpSignal: null,
   riskDashboard: null,
   desk: null,
+  analysts: null,
 };
 
 function generateClientId(): string {
@@ -127,6 +129,13 @@ export function useLiveData(): LiveState & {
               // a desk that has since halted — the backend always sends this
               // key, and on failure it reports the switch as engaged.
               ...(d.desk && { desk: d.desk }),
+              // The analysts. Same reasoning as the desk, and sharper: these
+              // are sentences asserting numbers, each carrying a grounded
+              // badge earned against a specific journal state. A dropped
+              // update must not leave last cycle's prose wearing this
+              // cycle's badge, so the backend always sends this key and the
+              // panel adopts whatever it says.
+              ...(d.analysts && { analysts: d.analysts }),
             },
             spot: d.spot ?? prev.spot,
             underlying: d.underlying ?? prev.underlying,

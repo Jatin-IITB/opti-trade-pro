@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from optitrade.data import SnapshotStore
 from optitrade.desk import KillSwitch
 
+from .api.routes.analysts import router as analysts_router
 from .api.routes.analytics import router as analytics_router
 from .api.routes.auth import router as auth_router
 from .api.routes.backtesting import router as backtesting_router
@@ -30,6 +31,7 @@ from .api.routes.market_data import router as market_data_router
 from .api.routes.portfolio import router as portfolio_router
 from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
+from .services.analyst_service import AnalystService, analyst_config_from_settings
 from .services.auth_service import AuthService
 from .services.book_snapshot_store import BookSnapshotStore
 from .services.capture_control import autostart_if_configured
@@ -107,12 +109,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.desk_service = desk_service
 
+    # The analysts read the journal the desk writes and explain it, auditing
+    # every claim they make against the events they cite. Read-only: this
+    # service never appends to the journal. One instance per app so the cache
+    # and the shared in-flight replay are shared across callers.
+    analyst_service = AnalystService(
+        Path(settings.desk_journal_dir),
+        analyst_config_from_settings(),
+    )
+    app.state.analyst_service = analyst_service
+
     app.state.live_pipeline = LivePipelineService(
         ws_manager=websocket_manager,
         config=LivePipelineConfig(),
         book_fn=_current_book,
         history=history_analytics,
         desk=desk_service,
+        analysts=analyst_service,
     )
 
     logger.info(f"Environment: {settings.environment}")
@@ -264,6 +277,11 @@ def create_app() -> FastAPI:
     app.include_router(connectors_router, prefix="/api/v1")
     app.include_router(portfolio_router, prefix="/api/v1")
     app.include_router(desk_router, prefix="/api/v1")
+    # Registered here, with the other routers, and NOT after the StaticFiles
+    # mount at the bottom of this function: the mount serves index.html for
+    # any unmatched path, so a router added below it would answer every
+    # /api/v1/analysts/* call with the HTML shell at status 200.
+    app.include_router(analysts_router, prefix="/api/v1")
 
     # Exception handlers
     @app.exception_handler(OptionsTradinError)

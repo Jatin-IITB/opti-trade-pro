@@ -15,6 +15,7 @@ from typing import Any
 
 from optitrade.data.models import RawChain
 
+from .analyst_service import AnalystService, unavailable_analysts_wire
 from .capture_service import CaptureReport
 from .desk_service import DeskService, unavailable_desk_wire
 from .history_analytics import HistoryAnalytics, unavailable_history_wire
@@ -45,6 +46,7 @@ class LivePipelineService:
         book_fn: Callable[[], BookContext | None] | None = None,
         history: HistoryAnalytics | None = None,
         desk: DeskService | None = None,
+        analysts: AnalystService | None = None,
     ) -> None:
         """``book_fn`` supplies the user's synced book, if any.
 
@@ -61,6 +63,10 @@ class LivePipelineService:
         this path: broadcasting must never advance the desk, because an
         advance takes paper fills and mutates a persisted book. A trade that
         happened because a dashboard ticked would be a trade nobody chose.
+
+        ``analysts`` supplies the analyst panel. Read-only against the same
+        journal the desk writes, so it is safe on this path for the same
+        reason the desk read is.
         """
         self._ws_manager = ws_manager
         self._config = config
@@ -68,6 +74,7 @@ class LivePipelineService:
         self._book_fn = book_fn
         self._history = history
         self._desk = desk
+        self._analysts = analysts
         self._last_payload: LiveDashboardPayload | None = None
         self._last_chain: RawChain | None = None
 
@@ -152,6 +159,25 @@ class LivePipelineService:
             else unavailable_desk_wire(
                 "The paper desk state could not be read. The book is not shown "
                 "rather than shown as empty; check the server logs."
+            )
+        )
+
+        # Same contract for the analysts, and it matters most here: analyst
+        # output is prose asserting numbers. Leaving the last good reports on
+        # screen would keep sentences about a journal this process can no
+        # longer read, each still wearing its grounded badge from the previous
+        # audit. The key is therefore always present.
+        try:
+            analysts = await self._analysts.build_async() if self._analysts is not None else None
+        except Exception:
+            logger.exception("Analyst report failed; reporting the panel as unavailable")
+            analysts = None
+        wire["analysts"] = (
+            analysts.to_wire_dict()
+            if analysts is not None
+            else unavailable_analysts_wire(
+                "The analyst reports could not be produced. No analyst prose is shown "
+                "rather than stale prose; check the server logs."
             )
         )
         return wire
