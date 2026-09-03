@@ -25,8 +25,26 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client() -> TestClient:
-    return TestClient(main_module.app)
+def built_dist(tmp_path):
+    """A stand-in for `frontend/dist`.
+
+    The real one is gitignored, so it exists on a developer machine that has
+    run `npm run build` and not on CI. Depending on that is how the first cut
+    of this file passed locally and failed in CI — the tests must fix the
+    condition they are testing, not inherit it from the machine.
+    """
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        "<!doctype html><html><body><div id='root'></div></body></html>"
+    )
+    return dist
+
+
+@pytest.fixture()
+def client(built_dist, monkeypatch) -> TestClient:
+    monkeypatch.setattr(main_module, "frontend_dist_path", lambda: built_dist)
+    return TestClient(main_module.create_app())
 
 
 class TestApiIsNotShadowed:
