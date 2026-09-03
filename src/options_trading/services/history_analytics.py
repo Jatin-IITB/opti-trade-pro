@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -71,6 +72,7 @@ _RV_IS_PRIOR = "rv_is_prior"
 MIN_DAYS_VRP = 3
 # A P&L explain needs a start and an end; one book snapshot explains nothing.
 _MIN_BOOK_SNAPSHOTS = 2
+_SECONDS_PER_DAY = 86_400.0
 
 
 @dataclass(frozen=True)
@@ -100,10 +102,23 @@ class HistoryAnalyticsConfig:
     gamma_budget_frac: float = 0.005
     max_drawdown: float = 0.25
     max_concentration: float = 1.0
+    #: Largest gap between the two books a P&L attribution will compare. The
+    #: default spans a long weekend plus a holiday; beyond that the pair is not
+    #: a daily move and the panel says so instead.
+    max_explain_gap_days: float = 4.0
 
     def __post_init__(self) -> None:
         if not self.entry_vrp_grid:
             raise ValueError("entry_vrp_grid must be non-empty; it is the walk-forward search")
+        if list(self.entry_vrp_grid) != sorted(self.entry_vrp_grid):
+            # The VRP chart shades its entry band at the lowest threshold while
+            # the equity curve runs the first one, so an unordered grid makes
+            # the two panels describe different strategies. Ordering is cheaper
+            # to require than to reconcile.
+            raise ValueError(
+                f"entry_vrp_grid must be ascending, got {self.entry_vrp_grid}; "
+                "the chart shades the lowest threshold and the curve runs the first"
+            )
 
     @property
     def min_days_backtest(self) -> int:
@@ -133,6 +148,7 @@ def history_config_from_settings() -> HistoryAnalyticsConfig:
         gamma_budget_frac=settings.history_gamma_budget_frac,
         max_drawdown=settings.history_backtest_max_drawdown,
         max_concentration=settings.history_backtest_max_concentration,
+        max_explain_gap_days=settings.history_max_explain_gap_days,
     )
 
 
@@ -333,7 +349,12 @@ class HistoryAnalytics:
         self._cached: HistoryPayload | None = None
         self._cached_key: tuple[str, ...] | None = None
         self._cached_at: float = -np.inf
+        # Async lock guards task creation; the threading lock guards the cache
+        # itself, which is written from worker threads that an asyncio lock
+        # cannot see.
         self._lock = asyncio.Lock()
+        self._cache_lock = threading.Lock()
+        self._inflight: asyncio.Task[HistoryPayload] | None = None
 
     @property
     def config(self) -> HistoryAnalyticsConfig:
@@ -371,19 +392,23 @@ class HistoryAnalytics:
         leave the demo curve on screen, so the catch-all is the fail-closed
         boundary (ADR-008) rather than defensive padding.
         """
-        key = self._day_key()
-        if self._cache_is_fresh(key):
-            assert self._cached is not None  # guaranteed by _cache_is_fresh
-            return self._cached
-        try:
-            payload = self._build_uncached()
-        except Exception as exc:
-            logger.exception("History analytics build failed for %s", self._config.underlying)
-            payload = self._unavailable(f"the history analytics failed: {type(exc).__name__}")
-        self._cached = payload
-        self._cached_key = key
-        self._cached_at = self._clock()
-        return payload
+        with self._cache_lock:
+            key = self._day_key()
+            if self._cache_is_fresh(key):
+                assert self._cached is not None  # guaranteed by _cache_is_fresh
+                return self._cached
+            try:
+                payload = self._build_uncached()
+            except Exception as exc:
+                logger.exception("History analytics build failed for %s", self._config.underlying)
+                payload = self._unavailable(f"the history analytics failed: {type(exc).__name__}")
+            # Published under the lock. The three fields are one logical value:
+            # an interleaved writer could otherwise pair a stale payload with a
+            # fresh timestamp and pin it for the whole refresh interval.
+            self._cached = payload
+            self._cached_key = key
+            self._cached_at = self._clock()
+            return payload
 
     def _unavailable(self, reason: str) -> HistoryPayload:
         cfg = self._config
@@ -404,9 +429,21 @@ class HistoryAnalytics:
         every stored date directory, which on a year of history is hundreds of
         milliseconds of ``iterdir`` — not something to do on the event loop
         merely to decide whether work is needed.
+
+        Callers share one in-flight task rather than each awaiting their own
+        ``to_thread``. Cancellation is why: ``asyncio.to_thread`` cancels the
+        *future*, not the thread behind it, so a dashboard client that
+        disconnects mid-build releases the async lock while its worker is
+        still running. The next caller would then start a second full replay —
+        seconds of duplicated surface fitting per reconnect, with both threads
+        racing to publish. Shielding a shared task means a disconnect abandons
+        the result, not the work.
         """
         async with self._lock:
-            return await asyncio.to_thread(self.build)
+            if self._inflight is None or self._inflight.done():
+                self._inflight = asyncio.create_task(asyncio.to_thread(self.build))
+            task = self._inflight
+        return await asyncio.shield(task)
 
     # -- build ------------------------------------------------------------
 
@@ -520,6 +557,10 @@ class HistoryAnalytics:
                 "the first full day."
             )
         try:
+            # Counted separately from the two it decomposes: reporting
+            # "2 days available" to a user with months of history is a lie the
+            # fetch limit would otherwise tell.
+            days_available = len(self._book_store.dates())
             snapshots = self._book_store.end_of_day_snapshots(limit=_MIN_BOOK_SNAPSHOTS)
         except OSError:
             logger.exception("Could not read book snapshots")
@@ -530,10 +571,24 @@ class HistoryAnalytics:
                 f"{len(snapshots)} day(s) of book history; a P&L attribution "
                 f"compares two end-of-day books, so this appears after the "
                 f"next trading day.",
-                days_available=len(snapshots),
+                days_available=days_available,
             )
 
         start, end = snapshots[-2], snapshots[-1]
+        gap_days = (end.timestamp - start.timestamp) / _SECONDS_PER_DAY
+        if gap_days > self._config.max_explain_gap_days:
+            # The two most recent *stored* days need not be adjacent: after the
+            # app is offline for a stretch, they can be weeks apart. Decomposing
+            # that and labelling it the latest daily move produces plausible
+            # numbers for a period nobody asked about — and theta * dt over
+            # weeks, on options that may have expired inside the gap.
+            return _empty_pnl_explain(
+                f"The last two recorded books are {gap_days:.0f} days apart "
+                f"({_utc_date(start.timestamp)} to {_utc_date(end.timestamp)}), "
+                f"so there is no recent daily move to attribute. This fills in "
+                f"after the next two consecutive trading days.",
+                days_available=days_available,
+            )
         try:
             spots = self._book_store.intraday_spots(start.timestamp, end.timestamp)
             result = explain_book_pnl(start, end, intraday_spots=spots)

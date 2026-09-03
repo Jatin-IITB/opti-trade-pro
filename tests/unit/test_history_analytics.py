@@ -562,3 +562,154 @@ class TestPnlExplainPanel:
         panel = service.build().to_wire_dict()["pnlExplain"]
 
         assert panel["hasHistory"] is True
+
+
+class TestExplainGapGuard:
+    """Two stored days need not be adjacent days."""
+
+    @staticmethod
+    def two_day_store(tmp_path, gap_days: float) -> BookSnapshotStore:
+        store = BookSnapshotStore(tmp_path / "books")
+        for i, offset in enumerate((0.0, gap_days)):
+            store.write(
+                BookSnapshot(
+                    timestamp=BASE_TIMESTAMP + offset * SECONDS_PER_DAY,
+                    spot=24_000.0 + i * 100.0,
+                    rate=0.0679,
+                    legs=(
+                        LegSnapshot(
+                            symbol="NIFTY24000CE",
+                            strike=24_000.0,
+                            expiry=0.08,
+                            option_type="call",
+                            quantity=75.0,
+                            mark=300.0 + i * 40.0,
+                            iv=0.14,
+                            greeks=Greeks(delta=0.5, vega=2800.0, theta=-9000.0),
+                        ),
+                    ),
+                    equity=1_000_000.0,
+                )
+            )
+        return store
+
+    def test_adjacent_days_are_decomposed(self, tmp_path, config):
+        service = HistoryAnalytics(
+            build_store(tmp_path, 20), config, self.two_day_store(tmp_path, 1.0)
+        )
+
+        assert service.build().to_wire_dict()["pnlExplain"]["hasHistory"] is True
+
+    def test_a_long_weekend_still_counts_as_a_daily_move(self, tmp_path, config):
+        """Fri to Mon is three days and is the normal case, not an outage."""
+        service = HistoryAnalytics(
+            build_store(tmp_path, 20), config, self.two_day_store(tmp_path, 3.0)
+        )
+
+        assert service.build().to_wire_dict()["pnlExplain"]["hasHistory"] is True
+
+    def test_a_month_long_gap_is_refused(self, tmp_path, config):
+        """Theta over weeks, on options that may have expired inside the gap."""
+        service = HistoryAnalytics(
+            build_store(tmp_path, 20), config, self.two_day_store(tmp_path, 30.0)
+        )
+
+        panel = service.build().to_wire_dict()["pnlExplain"]
+
+        assert panel["hasHistory"] is False
+        assert "30 days apart" in panel["reason"]
+        assert panel["buckets"] is None
+
+    def test_days_available_is_not_capped_by_the_fetch_limit(self, tmp_path, config):
+        """A book with months of history must not report "2 days"."""
+        store = BookSnapshotStore(tmp_path / "many")
+        for day in range(9):
+            store.write(
+                BookSnapshot(
+                    timestamp=BASE_TIMESTAMP + day * 40 * SECONDS_PER_DAY,
+                    spot=24_000.0,
+                    rate=0.0679,
+                    legs=(
+                        LegSnapshot(
+                            symbol="X",
+                            strike=24_000.0,
+                            expiry=0.08,
+                            option_type="call",
+                            quantity=75.0,
+                            mark=300.0,
+                            iv=0.14,
+                            greeks=Greeks(vega=2800.0),
+                        ),
+                    ),
+                )
+            )
+        service = HistoryAnalytics(build_store(tmp_path, 20), config, store)
+
+        panel = service.build().to_wire_dict()["pnlExplain"]
+
+        assert panel["hasHistory"] is False, "40-day gaps exceed the guard"
+        assert panel["daysAvailable"] == 9
+
+
+class TestConcurrency:
+    async def test_concurrent_callers_share_one_build(self, tmp_path, config):
+        """A replay costs seconds; N dashboard clients must not trigger N of them."""
+        import asyncio
+
+        service = analytics(build_store(tmp_path, 20), config)
+        calls = 0
+        original = service._build_uncached
+
+        def counting():
+            nonlocal calls
+            calls += 1
+            return original()
+
+        service._build_uncached = counting
+
+        results = await asyncio.gather(*(service.build_async() for _ in range(4)))
+
+        assert calls == 1
+        assert all(r is results[0] for r in results)
+
+    async def test_a_cancelled_caller_does_not_orphan_the_build(self, tmp_path, config):
+        """asyncio.to_thread cancels the future, not the thread.
+
+        Before the in-flight task was shared and shielded, a client that
+        disconnected mid-build released the lock while its worker ran on, so
+        the next caller started a second full replay and both raced to publish.
+        """
+        import asyncio
+
+        service = analytics(build_store(tmp_path, 20), config)
+        calls = 0
+        original = service._build_uncached
+
+        def counting():
+            nonlocal calls
+            calls += 1
+            return original()
+
+        service._build_uncached = counting
+
+        first = asyncio.ensure_future(service.build_async())
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        await service.build_async()
+
+        assert calls == 1, "the abandoned build should be reused, not repeated"
+
+
+class TestGridOrdering:
+    def test_an_unordered_entry_grid_is_rejected(self):
+        """The chart shades min(grid); the curve runs grid[0]. They must agree."""
+        with pytest.raises(ValueError, match="ascending"):
+            HistoryAnalyticsConfig(entry_vrp_grid=(0.05, 0.02, 0.03))
+
+    def test_the_shaded_band_is_the_config_the_curve_runs(self, tmp_path, config):
+        vrp = analytics(build_store(tmp_path, 20), config).build().to_wire_dict()["vrpSignal"]
+
+        assert vrp["entryThreshold"] == config.entry_vrp_grid[0] == min(config.entry_vrp_grid)

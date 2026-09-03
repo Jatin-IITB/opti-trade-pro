@@ -19,6 +19,7 @@ from optitrade.core.types import Portfolio
 from ..utils.exceptions import AuthError
 from .book_pricing import price_book
 from .book_snapshot_store import BookSnapshotStore, snapshot_from_priced_book
+from .capture_scheduler import ScheduleConfig, is_market_open
 from .live_analytics import BookContext
 from .portfolio_client import (
     UpstoxFunds,
@@ -71,6 +72,7 @@ class PortfolioSyncService:
         spot_fn: Callable[[], float | None] | None = None,
         now_fn: Callable[[], float] = time.time,
         book_store: BookSnapshotStore | None = None,
+        schedule: ScheduleConfig | None = None,
     ) -> None:
         """``spot_fn`` supplies the live underlying level.
 
@@ -85,6 +87,10 @@ class PortfolioSyncService:
         ``book_store`` persists each priced book. Optional: without it the
         sync works exactly as before and the P&L explain panel reports that
         it has no history, rather than inventing one.
+
+        ``schedule`` supplies the trading calendar that decides when a book
+        snapshot counts as an end-of-day mark; it defaults to the NSE session
+        and should be given the same holiday list as the capture scheduler.
         """
         self._client = client
         self._ws_manager = ws_manager
@@ -92,6 +98,9 @@ class PortfolioSyncService:
         self._spot_fn = spot_fn
         self._now_fn = now_fn
         self._book_store = book_store
+        # Shares the capture scheduler's calendar so the two histories agree on
+        # which days are trading days.
+        self._schedule = schedule if schedule is not None else ScheduleConfig()
         self._last_prune_date: str | None = None
 
         self._latest_portfolio: Portfolio | None = None
@@ -206,12 +215,30 @@ class PortfolioSyncService:
     def _persist_book_snapshot(self) -> None:
         """Record the priced book so a later day's P&L can be explained.
 
-        Best-effort by design: the P&L explain tab is a reporting feature, and
-        a disk error must not fail a sync that has already fetched a good
-        book. A gap in the history shows up as a missing day in the explain
-        panel, which is visible, rather than as a lost sync, which is not.
+        **Only during market hours**, though the sync itself keeps running.
+        The two have different requirements: carried F&O positions are worth
+        showing at any hour, but a *snapshot* taken outside the session is not
+        an end-of-day mark. The broker returns the same carried positions all
+        weekend at an unchanged last price, so an ungated writer produced a
+        Saturday and a Sunday "close" with identical marks — and P&L explain,
+        comparing the last two stored days, then reported theta decay on a day
+        the market never opened. The spot is stale by then too, since it comes
+        from the last capture.
+
+        Gating here also makes the UTC-date grouping correct rather than
+        coincidental: the NSE session (09:15-15:30 IST) maps to 03:45-10:00
+        UTC, so a trading day's snapshots share one UTC date and the last of
+        them really is the close.
+
+        Best-effort otherwise: the explain tab is a reporting feature, and a
+        disk error must not fail a sync that already fetched a good book. A gap
+        shows up as a missing day in the panel, which is visible, rather than
+        as a lost sync, which is not.
         """
         if self._book_store is None:
+            return
+        if not is_market_open(self._now_fn(), self._schedule):
+            logger.debug("Market closed; not recording an end-of-day book snapshot")
             return
         book = self.get_book_context()
         if book is None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -16,6 +16,7 @@ from options_trading.services.portfolio_client import (
     UpstoxPosition,
 )
 from options_trading.services.portfolio_sync_service import PortfolioSyncStatus
+from options_trading.services.token_provider import TokenProvider
 from optitrade.core.types import (
     OptionContract,
     OptionType,
@@ -156,11 +157,21 @@ def client_no_sync():
             "options_trading.utils.auth_dependencies", fromlist=["get_current_user"]
         ).get_current_user
     ] = _no_auth_user
+    # A provider that cannot resolve, injected rather than patched.
+    #
+    # `TokenProvider.__init__` takes `auth_service_factory=AuthService` as a
+    # *default argument*, so the real class is captured into __defaults__ at
+    # definition time and no module-attribute patch can reach it. The previous
+    # `patch("...auth_service.AuthService")` was therefore inert: the route's
+    # lazy-init path called the real AuthService, and this test's verdict came
+    # down to whether the machine happened to hold a resolvable token. It
+    # passed on CI, passed here by test ordering, and failed as soon as the
+    # ordering changed — exactly the machine-state dependence CLAUDE.md forbids.
     mock_auth = MagicMock()
     mock_auth.__aenter__ = AsyncMock(side_effect=RuntimeError("no token"))
     mock_auth.__aexit__ = AsyncMock(return_value=False)
-    with patch("options_trading.services.auth_service.AuthService", return_value=mock_auth):
-        yield TestClient(app)
+    app.state.token_providers = {"default": TokenProvider(auth_service_factory=lambda: mock_auth)}
+    yield TestClient(app)
 
 
 class TestPortfolioPositions:

@@ -72,25 +72,28 @@ class ErrorBoundary extends Component<
 }
 
 /**
- * Where a panel's numbers come from.
+ * Where these panels' numbers come from.
  *
- * - `account`  — your broker account. Real money, real positions.
- * - `market`   — computed by the quant engines from a captured live option
- *                chain. Falls back to bundled demo data until the first
- *                capture cycle completes.
+ * Two kinds: panels describing your *broker account* (Risk, Scenarios, P&L
+ * Explain, Positions) and panels describing the *market*, computed by the
+ * quant engines from a captured option chain (Vol Surface, eSSVI, Chain,
+ * Greeks, Higher-Order, VRP, Backtest). Market panels fall back to bundled
+ * demo data until the first capture cycle completes; account panels report
+ * that they have no book rather than inventing one.
  *
- * There is no longer a `synthetic` source: every panel now has a real data
- * path. The three that need days of history (VRP, backtest, P&L explain)
- * report how much they are still missing through `HistoryGate` rather than
- * rendering a simulated stand-in.
+ * There is no third, "synthetic" kind any more — every panel has a real data
+ * path. The three needing days of history (VRP, Backtest, P&L Explain) report
+ * what they are still missing through `HistoryGate` instead of rendering a
+ * stand-in, and their fabricated demo series were deleted outright so there
+ * is nothing left to fall back to.
+ *
+ * This was a `DataSource` union on each nav item, but its only consumer was
+ * the "Sim" badge, which is gone. Kept as prose rather than an unread field.
  */
-type DataSource = "account" | "market";
-
 interface NavItem {
   id: string;
   label: string;
   icon: typeof Layers;
-  source: DataSource;
 }
 
 interface NavGroup {
@@ -102,9 +105,9 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Volatility",
     items: [
-      { id: "surface", label: "Vol Surface", icon: Layers, source: "market" },
-      { id: "essvi", label: "eSSVI Fit", icon: Target, source: "market" },
-      { id: "chain", label: "Option Chain", icon: Table, source: "market" },
+      { id: "surface", label: "Vol Surface", icon: Layers },
+      { id: "essvi", label: "eSSVI Fit", icon: Target },
+      { id: "chain", label: "Option Chain", icon: Table },
     ],
   },
   {
@@ -114,21 +117,19 @@ const NAV_GROUPS: NavGroup[] = [
         id: "greeks",
         label: "Greeks Book",
         icon: BarChart3,
-        source: "market",
       },
-      { id: "higher", label: "Higher-Order", icon: Zap, source: "market" },
-      { id: "risk", label: "Risk", icon: Shield, source: "account" },
+      { id: "higher", label: "Higher-Order", icon: Zap },
+      { id: "risk", label: "Risk", icon: Shield },
     ],
   },
   {
     label: "P&L & Scenarios",
     items: [
-      { id: "pnl", label: "P&L Explain", icon: TrendingUp, source: "account" },
+      { id: "pnl", label: "P&L Explain", icon: TrendingUp },
       {
         id: "scenarios",
         label: "Scenarios",
         icon: Grid3x3,
-        source: "account",
       },
     ],
   },
@@ -139,16 +140,15 @@ const NAV_GROUPS: NavGroup[] = [
         id: "backtest",
         label: "Backtest",
         icon: LineChart,
-        source: "market",
       },
-      { id: "vrp", label: "VRP Signal", icon: Activity, source: "market" },
+      { id: "vrp", label: "VRP Signal", icon: Activity },
     ],
   },
   {
     label: "Portfolio",
     items: [
-      { id: "portfolio", label: "Positions", icon: Briefcase, source: "account" },
-      { id: "connectors", label: "Connectors", icon: Plug, source: "account" },
+      { id: "portfolio", label: "Positions", icon: Briefcase },
+      { id: "connectors", label: "Connectors", icon: Plug },
     ],
   },
 ];

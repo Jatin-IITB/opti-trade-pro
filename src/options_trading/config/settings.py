@@ -284,6 +284,16 @@ class Settings(BaseSettings):
             "portfolio-level cap below that forbids the strategy outright."
         ),
     )
+    history_max_explain_gap_days: float = Field(
+        default=4.0,
+        gt=0,
+        description=(
+            "Largest gap, in days, between the two end-of-day books a P&L "
+            "attribution will compare. Spans a long weekend plus a holiday. "
+            "Beyond it the pair is not a daily move: theta would accrue over "
+            "weeks, on options that may have expired inside the gap."
+        ),
+    )
     history_band_proportional_cost: float = Field(
         default=5e-4,
         ge=0,
