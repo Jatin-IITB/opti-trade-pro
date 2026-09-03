@@ -54,12 +54,6 @@ async def initialize_app_services(
             from ..services.dashboard_service import DashboardService
             from ..services.market_data_service import MarketDataService
 
-            # StrategyService may not exist; import if present
-            try:
-                from ..services.strategy_service import StrategyService
-            except Exception:
-                StrategyService = None
-
             # create manager + services and attach to app.state
             market_data_manager = MarketDataManager(access_token=access_token)
             app.state.market_data_manager = market_data_manager
@@ -84,13 +78,6 @@ async def initialize_app_services(
                 spot_fn=_current_spot,
             )
 
-            if StrategyService:
-                app.state.strategy_service = StrategyService(
-                    market_data_service=app.state.market_data_service
-                )
-            else:
-                app.state.strategy_service = None
-
             # Log only short masked token for safety
             masked = access_token[:6] + "..." if isinstance(access_token, str) else "<not-string>"
             logger.info("Application services initialized; token prefix=%s", masked)
@@ -103,7 +90,6 @@ async def initialize_app_services(
                 "market_data_manager",
                 "market_data_service",
                 "dashboard_service",
-                "strategy_service",
             ):
                 if hasattr(app.state, key):
                     try:

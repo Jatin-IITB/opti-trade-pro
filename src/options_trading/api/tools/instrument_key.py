@@ -67,6 +67,55 @@ async def _load_instruments_df_async(force_reload: bool = False) -> pd.DataFrame
             return None
 
 
+#: Columns searched for a symbol, in preference order. An index carries its
+#: short code in ``tradingsymbol`` (Nifty 50 is ``NIFTY``) and its full label
+#: in ``name`` (``Nifty 50``), so a lookup must consider both.
+_MATCH_COLUMNS = ("tradingsymbol", "symbol", "name")
+
+
+def _normalised(subset: pd.DataFrame, col: str) -> pd.Series:
+    return subset[col].astype(str).str.strip().str.upper()
+
+
+def _match_instrument(subset: pd.DataFrame, ts: str) -> tuple[pd.Series, bool] | None:
+    """Best row for ``ts`` in ``subset``, and whether the match was exact.
+
+    Every candidate column is tried for an **exact** match before any
+    substring matching. Doing it the other way round silently resolves the
+    wrong instrument: searching "NIFTY 50" substring-matches "NIFTY 500" in
+    ``tradingsymbol``, and taking that first hit never reaches ``name``,
+    where "Nifty 50" sits as an exact match. That mis-resolution is not
+    visible downstream — the caller receives a well-formed instrument key
+    for the wrong index and captures an empty option chain.
+
+    When only substring candidates exist the shortest value wins, so a query
+    that is a prefix of several symbols resolves to the closest one rather
+    than to whichever row the dataset happened to list first.
+    """
+    for col in _MATCH_COLUMNS:
+        if col not in subset.columns:
+            continue
+        exact = subset[_normalised(subset, col) == ts]
+        if not exact.empty:
+            return exact.iloc[0], True
+
+    best: tuple[int, pd.Series] | None = None
+    for col in _MATCH_COLUMNS:
+        if col not in subset.columns:
+            continue
+        values = _normalised(subset, col)
+        candidates = subset[values.str.contains(ts, na=False, regex=False)]
+        if candidates.empty:
+            continue
+        lengths = values.loc[candidates.index].str.len()
+        index = lengths.idxmin()
+        if best is None or int(lengths.loc[index]) < best[0]:
+            best = (int(lengths.loc[index]), subset.loc[index])
+    if best is not None:
+        return best[1], False
+    return None
+
+
 async def get_instrument_key_async(trading_symbol: str, exchange: str) -> str | None:
     df = await _load_instruments_df_async()
     if df is None or df.empty:
@@ -81,31 +130,31 @@ async def get_instrument_key_async(trading_symbol: str, exchange: str) -> str | 
         logger.warning(f"No rows for exchange={ex}")
         return None
 
-    # Exact match
-    filtered = subset[subset["tradingsymbol"] == ts]
-
-    # Relaxed search fallback if no exact match
-    if filtered.empty:
-        for col in ("tradingsymbol", "symbol", "name"):
-            if col in subset.columns:
-                candidates = subset[subset[col].astype(str).str.upper().str.contains(ts, na=False)]
-                if not candidates.empty:
-                    filtered = candidates
-                    break
-
-    if filtered.empty:
+    match = _match_instrument(subset, ts)
+    if match is None:
         logger.warning(f"No instrument found for {trading_symbol} on {exchange}")
         return None
 
-    row = filtered.iloc[0]
+    row, is_exact = match
     key = row.get("instrument_key")
     if not key:
         logger.warning(f"instrument_key missing for {trading_symbol}/{exchange}")
         return None
 
-    logger.info(
-        f"Resolved {trading_symbol}/{exchange} -> {key} (tradingsymbol={row.get('tradingsymbol')})"
-    )
+    if not is_exact:
+        # Surfaced at warning level: an inexact resolution is the failure mode
+        # that captures the wrong instrument's chain, and it is otherwise
+        # indistinguishable from a correct one.
+        logger.warning(
+            f"Resolved {trading_symbol}/{exchange} -> {key} by partial match "
+            f"(tradingsymbol={row.get('tradingsymbol')}, name={row.get('name')}); "
+            "set trading_symbol to an exact symbol or name to remove the ambiguity"
+        )
+    else:
+        logger.info(
+            f"Resolved {trading_symbol}/{exchange} -> {key} "
+            f"(tradingsymbol={row.get('tradingsymbol')})"
+        )
     return key
 
 

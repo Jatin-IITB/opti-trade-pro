@@ -9,7 +9,6 @@ from ..market_data.manager import MarketDataManager
 from ..services.auth_service import AuthService
 from ..services.dashboard_service import DashboardService
 from ..services.market_data_service import MarketDataService
-from ..services.strategy_service import StrategyService
 from ..utils.app_init import initialize_app_services
 from ..utils.cache import AsyncCache
 
@@ -60,12 +59,3 @@ def get_market_data_service(request: Request) -> MarketDataService:
 
 def get_auth_service(request: Request) -> AuthService:
     return request.app.state.auth_service
-
-
-def get_strategy_service(request: Request) -> StrategyService:
-    if not request.app.state.strategy_service:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="StrategyService is not available. Check startup logs for errors.",
-        )
-    return request.app.state.strategy_service

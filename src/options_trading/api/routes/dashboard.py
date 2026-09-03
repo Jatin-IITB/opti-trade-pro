@@ -16,7 +16,6 @@ from ...models.dashboard import (
     MarketDataStatus,
     PositionSummary,
     RiskMetrics,
-    StrategyPerformance,
     SystemStatus,
 )
 from ...services.dashboard_service import DashboardService
@@ -73,26 +72,6 @@ async def get_market_data_status(
         logger.error(f"Failed to get market data status: {e}")
         raise HTTPException(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Market data status unavailable"
-        )
-
-
-@router.get("/strategies/performance", response_model=list[StrategyPerformance])
-async def get_strategy_performance(
-    limit: int = 10,
-    active_only: bool = True,
-    current_user: dict = Depends(get_current_user),
-    dashboard_service: DashboardService = Depends(get_dashboard_service),
-) -> list[StrategyPerformance]:
-    try:
-        strategies = await dashboard_service.get_strategy_performance(
-            limit=limit, active_only=active_only
-        )
-        return strategies
-    except Exception as e:
-        logger.error(f"Failed to get strategy performance: {e}")
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Strategy performance data unavailable",
         )
 
 

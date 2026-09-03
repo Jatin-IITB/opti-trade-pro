@@ -3,7 +3,6 @@
 """
 FIXED: Production-grade dashboard service integrating with existing MarketDataManager.
 Provides real-time system monitoring, risk calculations, and infrastructure status.
-Strategy-related functionality moved to StrategyService for better separation of concerns.
 """
 
 import logging
@@ -56,7 +55,6 @@ STRESS_SCENARIOS: dict[str, tuple[float, float]] = {
 class DashboardService:
     """
     Advanced dashboard service focused on system monitoring and infrastructure status.
-    Strategy-related functionality moved to StrategyService for better separation of concerns.
     """
 
     def __init__(
@@ -513,7 +511,7 @@ class DashboardService:
     ) -> PositionSummary:
         """
         Get aggregated portfolio position summary with real-time Greeks.
-        This aggregates data from all strategies via StrategyService.
+        Aggregates the priced book from the portfolio sync, not a strategy store.
         """
         try:
             cache_key = f"positions_summary_{symbol}_{expiry_date}"

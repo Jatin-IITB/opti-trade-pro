@@ -72,8 +72,6 @@ class Settings(BaseSettings):
     )
     upstox_auth_url: str = Field(default="https://api.upstox.com/v2/login/authorization/token")
     upstox_profile_url: str = Field(default="https://api.upstox.com/v2/user/profile")
-    upstox_charges_url: str = Field(default="https://api.upstox.com/v2/charges/brokerage")
-    upstox_margin_url: str = Field(default="https://api.upstox.com/v2/charges/margin")
     upstox_oauth_dialog_url: str = Field(
         default="https://api-v2.upstox.com/login/authorization/dialog"
     )
@@ -82,7 +80,6 @@ class Settings(BaseSettings):
     upstox_option_chain_url: str = Field(default="https://api.upstox.com/v2/option/chain")
 
     default_api_version: str = Field(default="2.0")
-    default_accept_header: str = Field(default="application/json")
     default_content_type: str = Field(default="application/x-www-form-urlencoded")
 
     # -------------------------------------------------------------------------
@@ -118,11 +115,8 @@ class Settings(BaseSettings):
     # API Configuration
     # -------------------------------------------------------------------------
     api_timeout_seconds: int = Field(default=30)
-    api_retry_attempts: int = Field(default=3)
-    api_retry_delay_seconds: int = Field(default=2)
     max_concurrent_requests: int = Field(default=5)
     api_calls_per_minute: int = Field(default=50)
-    rate_limit_buffer_seconds: float = Field(default=1.2)
 
     # -------------------------------------------------------------------------
     # Database & Redis
@@ -306,6 +300,102 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
+    # Paper desk (optitrade.desk.cycle over the captured history)
+    # -------------------------------------------------------------------------
+    # The desk trades a NOTIONAL account with PAPER fills computed inside the
+    # quant core. There is no order-placement path in this application and
+    # these settings do not create one; the Upstox connection stays read-only.
+    # The desk reuses the history replay settings (underlying, surface,
+    # rv_window, tenor_days) and the paper-account risk budgets above, so the
+    # panel it shows and the backtest it is compared against cannot silently
+    # describe different markets.
+    desk_state_path: str = Field(
+        default="runtime_data/desk_state.json",
+        description=(
+            "Persisted paper-desk state: the book, the notional account, and "
+            "which captured dates have been cycled. Restoring it is what stops "
+            "a restart from re-entering positions the desk already holds. "
+            "Contains position detail, so it lives under gitignored runtime_data."
+        ),
+    )
+    desk_journal_dir: str = Field(
+        default="runtime_data/desk_journal",
+        description=(
+            "Directory for the desk's append-only event journal. One stable "
+            "run id accumulates across restarts so the correlation ids stored "
+            "in past cycle records stay resolvable (ADR-009)."
+        ),
+    )
+    desk_kill_switch_path: str = Field(
+        default="runtime_data/HALT",
+        description=(
+            "Marker file for the desk kill switch; engaged iff it exists. Any "
+            "process or a human with `touch` can halt the desk, and the halt "
+            "survives a restart."
+        ),
+    )
+    desk_initial_equity: float = Field(
+        default=1_000_000.0,
+        gt=0,
+        description="Starting equity of the desk's notional paper account (INR)",
+    )
+    desk_lot_size: int = Field(
+        default=75,
+        ge=1,
+        description="Contract lot size the desk trades; NIFTY options are 75 per lot",
+    )
+    desk_quantity: float = Field(
+        default=1.0,
+        gt=0,
+        description="Lots sold per leg when the desk enters a short-vol structure",
+    )
+    desk_entry_vrp_min: float = Field(
+        default=0.03,
+        description=(
+            "Minimum variance risk premium (atm_iv - realized_vol, in decimal "
+            "vol) before the desk opens a structure"
+        ),
+    )
+    desk_exit_vrp_max: float = Field(
+        default=0.0,
+        description="VRP level at or below which the desk buys the structure back",
+    )
+    desk_spread_frac: float = Field(
+        default=0.005,
+        ge=0,
+        description=(
+            "Full relative bid-ask spread assumed for paper fills; each fill "
+            "pays half of it, so buys pay up and sells receive less. This is "
+            "the honesty margin on a simulated fill, not a broker charge."
+        ),
+    )
+    desk_require_debate: bool = Field(
+        default=True,
+        description=(
+            "Run the governance debate panel before the risk engine. The "
+            "fail-closed risk review runs regardless (ADR-008)."
+        ),
+    )
+    desk_refresh_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Minimum seconds before a desk advance refits the replay. The "
+            "captured history gains at most one end-of-day snapshot per date, "
+            "so refitting faster only burns CPU."
+        ),
+    )
+    desk_max_cycles_retained: int = Field(
+        default=250,
+        ge=1,
+        description=(
+            "Cycle summaries kept in the desk state file (~one trading year). "
+            "The journal remains the complete audit trail; this bounds only "
+            "what the panel tabulates."
+        ),
+    )
+
+    # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------
     risk_free_rate: float = Field(default=0.0679)
@@ -323,8 +413,6 @@ class Settings(BaseSettings):
     rv_window_3min: int = Field(default=130)  # ≈ 1.5 trading days
     rv_buffer_weeks: int = Field(default=2)
     min_rv_coverage: float = Field(default=0.8)
-    FALLBACK_BROKERAGE_CHARGE: float = Field(default=82.89)
-    # FALLBACK_MARGIN_REQUIREMENT
     # -------------------------------------------------------------------------
     # Cache
     # -------------------------------------------------------------------------

@@ -90,6 +90,7 @@ Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 | Walk-forward | `optitrade.backtest` | Combinatorial purged cross-validation, deflated Sharpe, synthetic + real-history replay | `test_walk_forward.py`, `test_dsr.py` |
 | Paper desk | `optitrade.desk` | Daily cycle: mark → strategy → debate → risk → fill → hedge → journal; kill switch on drawdown halt | `test_daily_cycle.py`, `test_kill_switch.py` |
 | Live capture | `options_trading` | Upstox chains → quote filters → Parquet; unattended scheduler inside IST window | `test_capture_service.py`, `test_capture_scheduler.py` |
+| Desk platform | `options_trading` | Drives the core cycle over captured history: one cycle per stored day, idempotent by recorded date, book persisted across restarts, journal decision trail, file-based kill switch. **Paper fills only — the app has no order-placement path** | `test_desk_service.py`, `test_desk_routes.py`, `test_desk_state_store.py` |
 | Drift metric | `optitrade.desk` | Backtest-vs-desk reconciliation on identical days — measures the execution-model gap in bps | `test_reconcile.py` |
 | Daily report | `optitrade.desk` | Markdown artifact: desk summary + analyst sections, each groundedness-scored | `test_daily_report.py` |
 | LLM analysts | `optitrade.agents` | Hybrid: deterministic claims + LLM narrative; orchestrator runs both tiers, fail-open capture | `test_llm_analyst.py`, `test_orchestrator.py` |

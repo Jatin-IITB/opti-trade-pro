@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import numpy as np
 
@@ -251,8 +251,32 @@ def _dominant_skip_reason(journal: EventLog) -> str | None:
     return f"{reason} ({hits} of {total} rejections)"
 
 
-def backtest_risk_limits(config: HistoryAnalyticsConfig, spot: float) -> RiskLimits:
-    """Risk caps for the replayed backtest, derived from its own equity.
+class PaperAccountBudget(Protocol):
+    """The risk budget of a hypothetical account, as a set of fractions.
+
+    A structural type rather than a concrete config so the paper desk
+    (:mod:`options_trading.services.desk_service`) shares this conversion
+    instead of re-deriving it. Both accounts have the same problem — a
+    notional equity that must be turned into Greek caps — and two copies of
+    the arithmetic would be two places to get the vega scaling wrong.
+    """
+
+    @property
+    def initial_equity(self) -> float: ...
+    @property
+    def delta_budget_frac(self) -> float: ...
+    @property
+    def gamma_budget_frac(self) -> float: ...
+    @property
+    def vega_budget_frac(self) -> float: ...
+    @property
+    def max_drawdown(self) -> float: ...
+    @property
+    def max_concentration(self) -> float: ...
+
+
+def backtest_risk_limits(config: PaperAccountBudget, spot: float) -> RiskLimits:
+    """Risk caps for a hypothetical paper account, derived from its equity.
 
     The backtest is a hypothetical account, not the user's book, so it must
     not inherit ``risk_max_abs_*``: those caps are sized for the real
@@ -271,7 +295,7 @@ def backtest_risk_limits(config: HistoryAnalyticsConfig, spot: float) -> RiskLim
     - **gamma** enters at second order: ``0.5 * gamma * (0.01 * spot)^2``.
 
     Args:
-        config: History config carrying the equity and the budget fractions.
+        config: Any config carrying the equity and the budget fractions.
         spot: Representative underlying level for the replayed period; the
             delta and gamma conversions are spot-dependent, so a NIFTY cap
             and a stock cap cannot share a number.

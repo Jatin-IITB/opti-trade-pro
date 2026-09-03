@@ -210,20 +210,6 @@ class TradingError(OptionsTradinError):
     pass
 
 
-class BrokerageCalculationError(TradingError):
-    """Raised when brokerage calculation fails."""
-
-    def __init__(self, message: str = "Brokerage calculation failed"):
-        super().__init__(message, error_code="BROKERAGE_CALCULATION_ERROR")
-
-
-class MarginCalculationError(TradingError):
-    """Raised when margin calculation fails."""
-
-    def __init__(self, message: str = "Margin calculation failed"):
-        super().__init__(message, error_code="MARGIN_CALCULATION_ERROR")
-
-
 class InsufficientFundsError(TradingError):
     """Raised when account has insufficient funds."""
 

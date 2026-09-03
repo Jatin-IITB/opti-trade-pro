@@ -271,7 +271,8 @@ def run_daily_cycle(
                     implied_vol=implied_vol,
                     realized_vol=day.realized_vol,
                     ctx=ctx,
-                )
+                ),
+                correlation_id=correlation_id,
             )
             if record.consensus is Stance.REJECT:
                 reason = f"debate consensus REJECT: {record.rationale}"
@@ -283,7 +284,7 @@ def run_daily_cycle(
                 )
                 continue
 
-        risk = engine.review(order, ctx)
+        risk = engine.review(order, ctx, correlation_id=correlation_id)
         if risk.verdict is Verdict.HALT:
             halt_reason = next(
                 (r.reason for r in risk.results if r.verdict is Verdict.HALT),
@@ -353,8 +354,9 @@ def run_daily_cycle(
             f"{decision.action}: {len(fills)} filled, {len(rejected)} rejected{hedge_note}"
         )
 
-    # (f) One summarising event; sub-decisions journaled above share this
-    # correlation id where the APIs allow (engine and panel mint their own).
+    # (f) One summarising event. Every sub-decision above — market features,
+    # debate records, risk reports, rejections, the hedge — shares this
+    # correlation id, so `events_by_correlation` reconstructs the whole day.
     journal.append(
         "daily_cycle",
         {

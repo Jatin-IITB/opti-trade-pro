@@ -60,7 +60,7 @@ async def get_instruments(
             "symbol": symbol,
             "exchange": exchange,
             "underlying_key": underlying_key,
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
         }
 
     except Exception as e:
@@ -93,7 +93,7 @@ async def get_contracts_for_expiry(
                 "expiry_date": expiry_date,
                 "contracts": [],
                 "count": 0,
-                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             }
 
         # Convert DataFrame to API response
@@ -118,7 +118,7 @@ async def get_contracts_for_expiry(
             "expiry_date": expiry_date,
             "contracts": contracts,
             "count": len(contracts),
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
         }
 
     except Exception as e:
@@ -240,7 +240,7 @@ async def process_historical_data(
         "job_id": job_id,
         "symbol": symbol,
         "params": params,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "z",
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
     }
 
 
@@ -361,7 +361,11 @@ async def calculate_live_greeks(
     """REAL: Calculate live Greeks using your existing preprocessing functions"""
     try:
         # Create mock current market data (in real implementation, fetch from live feeds)
-        current_time = datetime.datetime.utcnow()
+        # Timezone-aware: append_greeks_in_memory routes this through
+        # ensure_kolkata_tz, which *localizes* a naive value to IST rather than
+        # converting it. A naive UTC instant therefore landed 5h30m off and
+        # skewed the time-to-expiry the Greeks are computed from.
+        current_time = datetime.datetime.now(datetime.UTC)
         expiry_dt = datetime.datetime.strptime(expiry_date, "%Y-%m-%d")
 
         # Mock live data structure that matches your preprocessing pipeline
@@ -421,7 +425,7 @@ async def refresh_market_data(
         return {
             "message": "Market data refresh initiated",
             "symbols": symbols or "all",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
         }
     except Exception as e:
         logger.error(f"Market data refresh failed: {e}")
@@ -430,19 +434,21 @@ async def refresh_market_data(
 
 @router.get("/cache/stats")
 async def get_cache_stats(market_manager: MarketDataManager = Depends(get_market_data_manager)):
-    """Get cache statistics from your MarketDataManager"""
+    """Get cache statistics from the MarketDataManager's spot cache."""
     try:
-        # Use your existing cache stats
-        market_manager.cache_stats()
-
-        # Return cache info (this would be enhanced to return actual stats)
-        return {
-            "cache_size": 10,  # From your SpotDataCache max_cache_size
-            "cache_type": "SpotDataCache",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "message": "Check server logs for detailed cache statistics",
-        }
-
+        stats = market_manager.cache_stats()
     except Exception as e:
         logger.error(f"Failed to get cache stats: {e}")
         raise HTTPException(status_code=500, detail="Cache stats unavailable")
+
+    # cache_stats() swallows its own errors and returns {}. Reporting that as
+    # empty is the honest answer; the previous code discarded the real stats
+    # entirely and returned a fixed cache_size of 10 regardless.
+    if not stats:
+        raise HTTPException(status_code=503, detail="Cache stats unavailable")
+
+    return {
+        "cache_type": type(market_manager.spot_cache).__name__,
+        "stats": stats,
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+    }

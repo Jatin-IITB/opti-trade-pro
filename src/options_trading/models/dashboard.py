@@ -4,7 +4,7 @@ Advanced Pydantic models for dashboard data structures.
 Designed for institutional-grade options trading platform.
 """
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
@@ -28,15 +28,6 @@ class SystemHealth(str, Enum):
     WARNING = "warning"
     CRITICAL = "critical"
     OFFLINE = "offline"
-
-
-class StrategyStatus(str, Enum):
-    """Strategy execution status"""
-
-    ACTIVE = "active"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-    ERROR = "error"
 
 
 class ConnectionStatus(str, Enum):
@@ -117,65 +108,6 @@ class MarketDataStatus(BaseModel):
             data["data_quality"] = "fair"
         else:
             data["data_quality"] = "poor"
-        return data
-
-
-class GreeksSnapshot(BaseModel):
-    """Greeks values snapshot"""
-
-    delta: Decimal | None = None
-    gamma: Decimal | None = None
-    theta: Decimal | None = None
-    vega: Decimal | None = None
-    rho: Decimal | None = None
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-
-class PositionData(BaseModel):
-    """Individual position data"""
-
-    symbol: str
-    strike: Decimal
-    expiry_date: date
-    option_type: str  # CE or PE
-    quantity: int
-    entry_price: Decimal
-    current_price: Decimal
-    unrealized_pnl: Decimal
-    realized_pnl: Decimal
-    greeks: GreeksSnapshot | None = None
-    implied_volatility: Decimal | None = None
-
-
-class StrategyPerformance(BaseModel):
-    """Real-time strategy performance metrics"""
-
-    strategy_id: str
-    name: str
-    status: StrategyStatus
-    positions_count: int
-    total_pnl: Decimal
-    daily_pnl: Decimal
-    pnl_percentage: Decimal
-    risk_level: str
-    last_rebalance: datetime | None = None
-    max_drawdown: Decimal | None = None
-    sharpe_ratio: Decimal | None = None
-    portfolio_greeks: GreeksSnapshot | None = None
-    positions: list[PositionData] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def calculate_risk_level(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        pnl_pct = data.get("pnl_percentage", 0)
-        if abs(float(pnl_pct)) <= 2.0:
-            data["risk_level"] = "low"
-        elif abs(float(pnl_pct)) <= 5.0:
-            data["risk_level"] = "medium"
-        else:
-            data["risk_level"] = "high"
         return data
 
 
