@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 _OAUTH_STATE_TTL = 300
-_DEFAULT_RETURN_URL = "/dashboard"
+# The React app, served at the root. Previously "/dashboard", a server-rendered
+# page that loaded a hardcoded data object and random-walked the spot so it
+# animated like a live feed — so the first thing a user saw after connecting
+# their broker was a fabricated P&L. That page is gone; this points at the app
+# that shows the real book.
+_DEFAULT_RETURN_URL = "/"
 
 
 def safe_return_url(raw: str | None) -> str:

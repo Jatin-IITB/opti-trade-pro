@@ -12,9 +12,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from optitrade.data import SnapshotStore
@@ -49,6 +48,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 websocket_manager = WebSocketManager()
+
+
+def frontend_dist_path() -> Path:
+    """Directory holding the built React app, or a non-existent path.
+
+    Module-level so tests can point it elsewhere: the served-vs-missing branch
+    is a real behaviour difference and both sides need covering.
+    """
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -234,16 +242,6 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
-    # Static files and templates
-    here = Path(__file__).parent
-    static_dir = here / "static"
-    templates_dir = here / "templates"
-
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-    templates = Jinja2Templates(directory=templates_dir) if templates_dir.exists() else None
-
     # Routers
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(dashboard_router, prefix="/api/v1")
@@ -299,128 +297,30 @@ def create_app() -> FastAPI:
             },
         }
 
-    @app.get("/", tags=["Root"])
-    async def root():
-        return {
-            "message": "Options Trading Platform v2.1",
-            "docs": "/docs",
-            "health": "/health",
-            "auth": "/api/v1/auth/login",
-            "dashboard": "/dashboard",
-        }
+    # The React app is the only dashboard. It is served from here in
+    # production so the whole product lives on one origin: same-origin means
+    # no CORS, and the OAuth session cookie is not at the mercy of a dev
+    # proxy forwarding it. `npm run build` produces frontend/dist.
+    #
+    # Mounted last, after every router, so it can never shadow /api. Guarded
+    # on the directory existing, so a backend-only checkout still starts and
+    # says what is missing instead of 404ing into confusion.
+    frontend_dist = frontend_dist_path()
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_page(request: Request):
-        """Dashboard page with proper authentication checking."""
-        try:
-            authenticated = False
-            user_id = None
-            try:
-                if request.session.get("authenticated") is True:
-                    user_id = request.session.get("authenticated_user_id")
-                    if user_id:
-                        authenticated = True
-            except Exception:
-                authenticated = False
+    if frontend_dist.is_dir():
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="app")
+    else:
 
-            if not authenticated:
-                auth_service = getattr(request.app.state, "auth_service", None)
-                if auth_service is None:
-                    auth_service = AuthService()
-                    request.app.state.auth_service = auth_service
-                try:
-                    stored_users = await auth_service.storage.list_stored_users()
-                    if stored_users:
-                        user_id = stored_users[0]
-                        try:
-                            request.session["authenticated"] = True
-                            request.session["authenticated_user_id"] = user_id
-                        except Exception:
-                            pass
-                        authenticated = True
-                except Exception:
-                    authenticated = False
-
-            if not authenticated:
-                logger.info("User not authenticated, redirecting to login")
-                return RedirectResponse(url="/api/v1/auth/login")
-
-            if not getattr(request.app.state, "market_data_manager", None):
-                try:
-                    provider = get_token_provider(request.app, user_id or "default")
-                    access_token = await provider.get()
-                    from .utils.app_init import initialize_app_services
-
-                    await initialize_app_services(
-                        request.app, access_token=access_token, user_id=user_id
-                    )
-
-                    # Start portfolio sync if not already running
-                    if getattr(request.app.state, "portfolio_sync", None) is None:
-                        pc = UpstoxPortfolioClient(token_provider=provider)
-                        live_pipeline = getattr(request.app.state, "live_pipeline", None)
-                        ps = PortfolioSyncService(
-                            client=pc,
-                            ws_manager=websocket_manager,
-                            config=PortfolioSyncConfig(),
-                            spot_fn=(
-                                live_pipeline.get_latest_spot if live_pipeline is not None else None
-                            ),
-                        )
-                        request.app.state.portfolio_sync = ps
-                        request.app.state._portfolio_sync_task = asyncio.create_task(ps.run())
-                        logger.info("📋 PortfolioSyncService started after login")
-
-                    await autostart_if_configured(request.app, provider)
-                except Exception:
-                    return RedirectResponse(url="/api/v1/auth/login")
-
-            # If we reach here, user is authenticated and services are initialized
-            user_context = {
-                "user_id": user_id or "default",
-                "user_name": "Trader",
-                "email": "N/A",
-                "authenticated": True,
-            }
-
-            try:
-                async with request.app.state.auth_service as auth:
-                    token = await auth.get_valid_access_token(user_id or "default")
-                    profile = await auth.get_user_profile(token)
-                user_context.update(
-                    {
-                        "user_id": profile.user_id,
-                        "user_name": profile.user_name or "Trader",
-                        "email": profile.email or "N/A",
-                    }
-                )
-            except Exception:
-                pass
-
-            if templates:
-                return templates.TemplateResponse(
-                    request,
-                    "index.html",
-                    context={
-                        **user_context,
-                        "api_base": "/api/v1",
-                        "websocket_url": "ws://localhost:8000/api/v1/dashboard/ws",
-                    },
-                )
-            else:
-                return HTMLResponse(
-                    content=f"""
-                    <html><body>
-                    <h1>Welcome to your trading dashboard!</h1>
-                    <p>Dashboard template not found. Using fallback interface.</p>
-                    <p>Place your templates in:<br/><code>{(Path(__file__).parent / "templates")}</code></p>
-                    </body></html>
-                    """,
-                    status_code=200,
-                )
-        except Exception as e:
-            logger.error(f"Dashboard rendering error: {e}", exc_info=True)
-            return HTMLResponse("Internal error", status_code=500)
+        @app.get("/", tags=["Root"], response_class=HTMLResponse)
+        async def frontend_not_built() -> HTMLResponse:
+            """Say the build is missing rather than serving nothing."""
+            return HTMLResponse(
+                "<h1>Frontend not built</h1>"
+                "<p>Run <code>cd frontend &amp;&amp; npm run build</code>, then reload. "
+                "The API is already running: see <a href='/docs'>/docs</a> "
+                "and <a href='/health'>/health</a>.</p>",
+                status_code=503,
+            )
 
     return app
 
