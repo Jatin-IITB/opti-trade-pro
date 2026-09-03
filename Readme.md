@@ -95,8 +95,14 @@ Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 | Daily report | `optitrade.desk` | Markdown artifact: desk summary + analyst sections, each groundedness-scored | `test_daily_report.py` |
 | LLM analysts | `optitrade.agents` | Hybrid: deterministic claims + LLM narrative; orchestrator runs both tiers, fail-open capture | `test_llm_analyst.py`, `test_orchestrator.py` |
 | Research loop | `optitrade.research` | GridSearch + LLM agents propose → walk-forward evaluates → rank → journal; human approval gate | `test_research_loop.py`, `test_research_evaluator.py` |
-| MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py` |
+| MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py`, `test_mcp_schemas.py` |
 | Groundedness | `optitrade.audit` | Deterministic auditor: claim numbers must match journal citations | `test_groundedness.py` |
+
+This table is a module inventory, not a claim about what the web app surfaces.
+`optitrade.agents`, `optitrade.audit`, `optitrade.research` and
+`optitrade.attribution` currently have **no `options_trading` imports** — they
+are reachable from the CLI, the MCP server and tests, but no dashboard panel
+renders them. [docs/roadmap.md](docs/roadmap.md) tracks reach per phase.
 
 ## Quick start
 
@@ -107,16 +113,36 @@ optitrade demo         # end-to-end: chain → surface → Greeks → debate →
 optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
 optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # 571 tests, deterministic (seeded RNGs, no network)
+pytest -q              # 1097 tests, deterministic (seeded RNGs, no network)
 pytest -q -m benchmark # latency targets (run locally)
 ```
 
-Run the platform (needs Upstox credentials in `.env`, see `.env.example`):
+Run the platform (needs Upstox credentials in `.env`, see `.env.example`). The
+React app is served from the same origin, so this one command is the whole
+product:
 
 ```bash
+cd frontend && npm run build && cd ..
 uvicorn options_trading.main:app --reload --port 8000
-# docs at http://localhost:8000/docs — quant endpoints under /api/v1/analytics/*
+# app at http://localhost:8000 — API docs at /docs, quant endpoints under /api/v1/analytics/*
 ```
+
+## MCP server
+
+The engines are also reachable as agent tools over MCP stdio. Agents observe,
+explain and propose — no tool mutates a book or routes an order, and every call
+appends a `tool_call` journal event that `optitrade.audit` uses as the citation
+target for agent claims (ADR-015).
+
+```bash
+uv pip install -e ".[mcp]"     # optional extra; the server needs it
+optitrade-mcp --journal-dir runtime_data
+```
+
+Point any MCP client at that command. Tool arguments are declared as
+`TypedDict`s so the generated JSON schema names every field — `test_mcp_schemas.py`
+fails the build if a tool ever exposes a property-less `object` parameter, which
+is unusable by a calling agent.
 
 ## Analytics API
 

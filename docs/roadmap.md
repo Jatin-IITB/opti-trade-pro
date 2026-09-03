@@ -12,17 +12,30 @@ and propose only.**
 - Hedging: Whalley–Wilmott bands + RV/IV gamma scalping + GBM sim (ADR-007)
 - Risk: fail-closed pre-trade engine (ADR-008); journal (ADR-009); debate panel (ADR-010)
 
-## Phase status (2026-08-22)
+## Phase status (2026-09-03)
+
+Earlier revisions of this table said "Built" and "Complete", which conflated
+*module exists and passes unit tests* with *a user can reach it*. Four
+subpackages were marked complete while having zero platform imports, and the
+MCP server was marked complete having never been started — its tests cover the
+import-cleanly-without-`mcp` path, so they passed while the server was
+unrunnable. Rule 8 of CLAUDE.md applies to this file too, so state now means
+reach, not line count:
+
+- **Live** — exercised against real data outside the test suite
+- **Wired** — reachable from the running product; waiting on data, not code
+- **Standalone** — importable and unit-tested; nothing in the product calls it
+- **Unverified** — never run outside unit tests (optional dependency absent)
 
 | Phase | State |
 |---|---|
-| 0 Data pipeline | **Complete** — filters + Parquet store + capture API + unattended IST-window scheduler (ADR-019); accumulate real days by starting `/capture/schedule/start` |
-| 1 Joint surface | **Built** — eSSVI joint fit, Durrleman + RND gates, SABR benchmark (ADR-012) |
-| 2 AAD + P&L explain | **Complete** — P&L explain + PCA factors + bucket reports; JAX AAD with exact higher-order Greeks and `vmap` book vectorisation (ADR-023) |
-| 3 Strategy + backtest | **Built** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); `StoreReplay` runs it on real history as it accumulates |
-| 4 Paper loop | **Built** — daily cycle, kill switch, daily report, backtest-vs-desk drift metric (ADR-018/019/020); remaining: wire cycle to live captures on a schedule, drive drift toward zero |
-| 5 Agent layer | **Complete** — MCP server, groundedness auditor, all four deterministic analysts, LLM adapters over the same rails (`LLMBackend` protocol, `DspyBackend`, `AnalystOrchestrator`), MCP `run_experiment` tool (ADR-021) |
-| 6 Research loop | **Built** — `GridSearchAgent` + `LLMResearchAgent` propose, `ProposalEvaluator` runs walk-forward, `ResearchLoop` orchestrates → rank → journal; human approval gate before config changes land as ADRs; `optitrade research` CLI (ADR-022) |
+| 0 Data pipeline | **Live** — filters + Parquet store + capture API + unattended IST-window scheduler (ADR-019); first real capture 2026-09-03, one day on disk |
+| 1 Joint surface | **Wired** — eSSVI joint fit, Durrleman + RND gates, SABR benchmark (ADR-012); `LiveAnalytics` fits it per capture, so panels fill during market hours |
+| 2 AAD + P&L explain | **Wired** — P&L explain + PCA factors + bucket reports; JAX AAD with exact higher-order Greeks and `vmap` (ADR-023). The platform bridge needs two end-of-day book snapshots, so it reports unavailable until a second trading day closes |
+| 3 Strategy + backtest | **Wired** — VRP strategy, Indian cost model, walk-forward + deflated Sharpe (ADR-016/017); `HistoryAnalytics` replays real history and gates the panel until 3 days (VRP) / 11 days (walk-forward) exist |
+| 4 Paper loop | **Live** — daily cycle, kill switch, daily report, drift metric (ADR-018/019/020); first real cycle 2026-09-03 held on one priming day. Remaining: the HALT backlog gap in ADR-027, and driving drift toward zero |
+| 5 Agent layer | **Split.** MCP server: **Live** — six tools verified over a real stdio handshake 2026-09-03, every call journaled; needs the `[mcp]` extra. Groundedness auditor and the four deterministic analysts: **Standalone** — no platform imports, so nothing surfaces them. LLM adapters (`LLMBackend`, `DspyBackend`, `AnalystOrchestrator`): **Unverified** — the `[agentic]` extra has never been installed |
+| 6 Research loop | **Standalone** — `GridSearchAgent` + `LLMResearchAgent` propose, `ProposalEvaluator` runs walk-forward, `ResearchLoop` ranks → journals; `optitrade research` CLI (ADR-022). No platform imports, and walk-forward needs 11+ captured days |
 
 ## Phase detail
 
