@@ -12,6 +12,7 @@ export interface DashboardData {
   backtestEquity: any;
   vrpSignal: any;
   riskDashboard: any;
+  desk: any;
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -34,7 +35,11 @@ export function useLiveData(): LiveState & {
   requestSnapshot: () => void;
 } {
   const [state, setState] = useState<LiveState>({
-    data: demoData as DashboardData,
+    // `desk: null` rather than a demo desk: there is no honest stand-in for
+    // "what the desk traded", and demo.json is the file this codebase
+    // deleted its fabricated series from. Until the backend answers, the
+    // panel reports that it has heard nothing.
+    data: { ...(demoData as Omit<DashboardData, "desk">), desk: null },
     status: "disconnected",
     spot: demoData.volSurface.spot,
     underlying: "NIFTY",
@@ -93,6 +98,11 @@ export function useLiveData(): LiveState & {
               ...(d.vrpSignal && { vrpSignal: d.vrpSignal }),
               ...(d.backtestEquity && { backtestEquity: d.backtestEquity }),
               ...(d.pnlExplain && { pnlExplain: d.pnlExplain }),
+              // The paper desk. Carries its own kill-switch state, so a
+              // dropped update must not leave a stale "clear" badge next to
+              // a desk that has since halted — the backend always sends this
+              // key, and on failure it reports the switch as engaged.
+              ...(d.desk && { desk: d.desk }),
             },
             spot: d.spot ?? prev.spot,
             underlying: d.underlying ?? prev.underlying,

@@ -15,6 +15,7 @@ import {
   Plug,
   ChevronDown,
   ChevronRight,
+  FlaskConical,
 } from "lucide-react";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
@@ -30,6 +31,7 @@ import { HoldingsTable } from "./components/HoldingsTable";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
+import { DeskPanel } from "./components/DeskPanel";
 import { HistoryGate } from "./components/HistoryGate";
 import { usePortfolio } from "./hooks/usePortfolio";
 import { useLiveData } from "./hooks/useLiveData";
@@ -142,6 +144,7 @@ const NAV_GROUPS: NavGroup[] = [
         icon: LineChart,
       },
       { id: "vrp", label: "VRP Signal", icon: Activity },
+      { id: "desk", label: "Paper Desk", icon: FlaskConical },
     ],
   },
   {
@@ -345,6 +348,10 @@ export default function App() {
               {activeTab === "risk" && (
                 <RiskDashboard data={data.riskDashboard} />
               )}
+              {/* No HistoryGate around the whole panel: the kill switch must
+                  stay reachable on a desk that has never run, so the gate
+                  sits inside DeskPanel around the cycle history alone. */}
+              {activeTab === "desk" && <DeskPanel data={data.desk} />}
               {activeTab === "portfolio" && (
                 <div className="space-y-6">
                   <PortfolioSummaryPanel
