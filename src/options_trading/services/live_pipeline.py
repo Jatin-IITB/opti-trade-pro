@@ -16,6 +16,7 @@ from typing import Any
 from optitrade.data.models import RawChain
 
 from .capture_service import CaptureReport
+from .desk_service import DeskService, unavailable_desk_wire
 from .history_analytics import HistoryAnalytics, unavailable_history_wire
 from .live_analytics import (
     BookContext,
@@ -43,6 +44,7 @@ class LivePipelineService:
         config: LivePipelineConfig = LivePipelineConfig(),
         book_fn: Callable[[], BookContext | None] | None = None,
         history: HistoryAnalytics | None = None,
+        desk: DeskService | None = None,
     ) -> None:
         """``book_fn`` supplies the user's synced book, if any.
 
@@ -54,12 +56,18 @@ class LivePipelineService:
         cached and far more expensive than the per-chain builders, so it is
         merged into the same broadcast rather than given its own cadence —
         the cost is paid at most once per refresh interval, not per tick.
+
+        ``desk`` supplies the paper-desk panel. Only its cheap *read* is on
+        this path: broadcasting must never advance the desk, because an
+        advance takes paper fills and mutates a persisted book. A trade that
+        happened because a dashboard ticked would be a trade nobody chose.
         """
         self._ws_manager = ws_manager
         self._config = config
         self._analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model=config.vol_model))
         self._book_fn = book_fn
         self._history = history
+        self._desk = desk
         self._last_payload: LiveDashboardPayload | None = None
         self._last_chain: RawChain | None = None
 
@@ -127,6 +135,23 @@ class LivePipelineService:
             else unavailable_history_wire(
                 "The history analytics could not be computed. The panel is "
                 "blank rather than showing a placeholder; check the server logs."
+            )
+        )
+
+        # Same contract for the desk: the key is always present, and a
+        # failure reports an unavailable desk with the kill switch shown as
+        # engaged rather than leaving the last good book on screen.
+        try:
+            desk = await self._desk.build_async() if self._desk is not None else None
+        except Exception:
+            logger.exception("Desk state failed; reporting the desk as unavailable")
+            desk = None
+        wire["desk"] = (
+            desk.to_wire_dict()
+            if desk is not None
+            else unavailable_desk_wire(
+                "The paper desk state could not be read. The book is not shown "
+                "rather than shown as empty; check the server logs."
             )
         )
         return wire

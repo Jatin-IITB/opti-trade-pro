@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from optitrade.data import SnapshotStore
+from optitrade.desk import KillSwitch
 
 from .api.routes.analytics import router as analytics_router
 from .api.routes.auth import router as auth_router
@@ -25,6 +26,7 @@ from .api.routes.backtesting import router as backtesting_router
 from .api.routes.capture import router as capture_router
 from .api.routes.connectors import router as connectors_router
 from .api.routes.dashboard import router as dashboard_router
+from .api.routes.desk import router as desk_router
 from .api.routes.market_data import router as market_data_router
 from .api.routes.portfolio import router as portfolio_router
 from .config.settings import get_settings
@@ -33,6 +35,8 @@ from .services.auth_service import AuthService
 from .services.book_snapshot_store import BookSnapshotStore
 from .services.capture_control import autostart_if_configured
 from .services.dashboard_service import DashboardService
+from .services.desk_service import DeskService, desk_config_from_settings
+from .services.desk_state_store import DeskStateStore
 from .services.history_analytics import HistoryAnalytics, history_config_from_settings
 from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
@@ -81,11 +85,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.history_analytics = history_analytics
 
+    # The paper desk. Reads the same Parquet store, runs the quant core's
+    # daily cycle, and books PAPER fills into its own notional account — it
+    # holds no broker client and cannot place an order. One instance per app:
+    # it serialises advances internally, and a second would let two runs
+    # start from the same book.
+    desk_service = DeskService(
+        SnapshotStore(Path(settings.snapshot_store_path)),
+        DeskStateStore(Path(settings.desk_state_path)),
+        Path(settings.desk_journal_dir),
+        KillSwitch(Path(settings.desk_kill_switch_path)),
+        desk_config_from_settings(),
+    )
+    app.state.desk_service = desk_service
+
     app.state.live_pipeline = LivePipelineService(
         ws_manager=websocket_manager,
         config=LivePipelineConfig(),
         book_fn=_current_book,
         history=history_analytics,
+        desk=desk_service,
     )
 
     logger.info(f"Environment: {settings.environment}")
@@ -246,6 +265,7 @@ def create_app() -> FastAPI:
     app.include_router(capture_router, prefix="/api/v1")
     app.include_router(connectors_router, prefix="/api/v1")
     app.include_router(portfolio_router, prefix="/api/v1")
+    app.include_router(desk_router, prefix="/api/v1")
 
     # Exception handlers
     @app.exception_handler(OptionsTradinError)
