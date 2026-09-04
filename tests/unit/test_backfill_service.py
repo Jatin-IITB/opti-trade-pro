@@ -19,7 +19,10 @@ from options_trading.services.backfill_service import (
     BackfillConfig,
     HistoricalChainBackfill,
     HistoricalContract,
+    candles_to_epoch_frame,
+    contracts_from_frame,
     reconstruct_chain,
+    spot_lookup_from_candles,
 )
 from options_trading.services.capture_service import expiry_year_fraction
 from optitrade.core.types import OptionType
@@ -282,6 +285,81 @@ class TestOrchestration:
         backfill = self._backfill(tmp_path, contracts=[])
 
         assert backfill.run("2026-09-08", self.DAYS, self.ZONE) == []
+
+
+class TestPayloadAdapters:
+    """Turning the broker's shapes into the reconstruction's shapes."""
+
+    def test_call_and_put_types_are_mapped(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"instrument_key": "A", "strike_price": 24000, "instrument_type": "CE"},
+                {"instrument_key": "B", "strike_price": 24000, "instrument_type": "PE"},
+            ]
+        )
+
+        contracts = contracts_from_frame(frame)
+
+        assert [c.option_type for c in contracts] == [OptionType.CALL, OptionType.PUT]
+        assert [c.strike for c in contracts] == [24000.0, 24000.0]
+
+    def test_an_untypeable_row_is_dropped_not_guessed(self) -> None:
+        """Defaulting would put a put's premium on a call's strike, which does
+        not fail loudly — it fits as a lopsided smile."""
+        frame = pd.DataFrame(
+            [
+                {"instrument_key": "A", "strike_price": 24000, "instrument_type": "CE"},
+                {"instrument_key": "B", "strike_price": 24000, "instrument_type": "XX"},
+            ]
+        )
+
+        contracts = contracts_from_frame(frame)
+
+        assert len(contracts) == 1
+        assert contracts[0].instrument_key == "A"
+
+    def test_a_naive_timestamp_index_is_read_as_exchange_time(self) -> None:
+        """The 5h30m trap: a naive IST index read as UTC shifts every bar."""
+        naive = pd.DataFrame({"close": [100.0]}, index=pd.to_datetime(["2026-09-04 14:10:00"]))
+
+        converted = candles_to_epoch_frame(naive)
+
+        assert float(converted.index[0]) == epoch(14, 10)
+
+    def test_a_tz_aware_index_is_preserved(self) -> None:
+        aware = pd.DataFrame(
+            {"close": [100.0]},
+            index=pd.to_datetime(["2026-09-04 14:10:00+05:30"]),
+        )
+
+        converted = candles_to_epoch_frame(aware)
+
+        assert float(converted.index[0]) == epoch(14, 10)
+
+
+class TestSpotLookup:
+    FRAME = pd.DataFrame(
+        {"close": [23900.0, 23950.0]},
+        index=pd.to_datetime(["2026-09-04 14:00:00", "2026-09-04 14:10:00"]),
+    )
+
+    def test_uses_the_bar_at_or_before(self) -> None:
+        lookup = spot_lookup_from_candles(self.FRAME, max_age_seconds=900.0)
+
+        assert lookup(epoch(14, 12)) == 23950.0
+        assert lookup(epoch(14, 5)) == 23900.0
+
+    def test_returns_none_when_the_nearest_bar_is_too_old(self) -> None:
+        """A chain anchored to a spot from hours earlier mislabels every
+        moneyness while looking entirely reasonable."""
+        lookup = spot_lookup_from_candles(self.FRAME, max_age_seconds=900.0)
+
+        assert lookup(epoch(16, 0)) is None
+
+    def test_returns_none_before_the_first_bar(self) -> None:
+        lookup = spot_lookup_from_candles(self.FRAME, max_age_seconds=900.0)
+
+        assert lookup(epoch(9, 30)) is None
 
 
 class TestTimeToExpiry:

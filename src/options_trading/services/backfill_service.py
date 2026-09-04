@@ -35,7 +35,7 @@ from optitrade.core.types import OptionType
 from optitrade.data import SnapshotStore
 from optitrade.data.models import ChainSource, RawChain, RawQuote
 
-from .capture_service import expiry_year_fraction
+from .capture_service import IST, expiry_year_fraction
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +356,79 @@ class HistoricalChainBackfill:
         return results
 
 
+_CALL_TYPES = frozenset({"CE", "CALL", "C"})
+_PUT_TYPES = frozenset({"PE", "PUT", "P"})
+
+
+def contracts_from_frame(frame: pd.DataFrame) -> list[HistoricalContract]:
+    """Map the expired-contracts payload to contracts, dropping what it cannot type.
+
+    A row whose ``instrument_type`` is neither a call nor a put is skipped
+    rather than defaulted. Guessing would put a put's premium on a call's
+    strike, which does not fail loudly — it fits as a lopsided smile.
+    """
+    contracts: list[HistoricalContract] = []
+    for row in frame.to_dict(orient="records"):
+        raw_type = str(row.get("instrument_type", "")).strip().upper()
+        if raw_type in _CALL_TYPES:
+            option_type = OptionType.CALL
+        elif raw_type in _PUT_TYPES:
+            option_type = OptionType.PUT
+        else:
+            logger.warning("Skipping contract with unrecognised type %r", raw_type)
+            continue
+        key = row.get("instrument_key")
+        strike = row.get("strike_price")
+        if not key or strike is None:
+            continue
+        contracts.append(HistoricalContract(str(key), float(strike), option_type))
+    return contracts
+
+
+def candles_to_epoch_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Re-index a candle frame from timestamps onto epoch seconds.
+
+    The reconstruction compares bar times against an epoch instant, so the
+    conversion happens once here rather than inside the hot loop. Upstox
+    returns tz-aware IST timestamps; ``.timestamp()`` resolves them correctly,
+    and a naive index would be read as UTC and shift every bar by 5h30m.
+    """
+    if frame.empty:
+        return frame
+    index = pd.to_datetime(frame.index)
+    if index.tz is None:
+        index = index.tz_localize(IST)
+    out = frame.copy()
+    out.index = pd.Index([ts.timestamp() for ts in index], name="epoch")
+    return out.sort_index()
+
+
+def spot_lookup_from_candles(
+    frame: pd.DataFrame, max_age_seconds: float
+) -> Callable[[float], float | None]:
+    """Build an as-of spot lookup over index candles.
+
+    Returns None rather than a number when the nearest bar is older than
+    ``max_age_seconds``. Anchoring a whole chain to a spot from hours earlier
+    would mislabel every moneyness while looking entirely reasonable.
+    """
+    epoch_frame = candles_to_epoch_frame(frame)
+
+    def lookup(at_epoch: float) -> float | None:
+        if epoch_frame.empty:
+            return None
+        mask = epoch_frame.index <= at_epoch
+        if not mask.any():
+            return None
+        bar_epoch = float(epoch_frame.index[mask][-1])
+        if at_epoch - bar_epoch > max_age_seconds:
+            return None
+        value = float(epoch_frame[mask].iloc[-1]["close"])
+        return value if value > 0.0 else None
+
+    return lookup
+
+
 __all__ = [
     "DEFAULT_MAX_BAR_AGE_SECONDS",
     "BackfillConfig",
@@ -363,6 +436,9 @@ __all__ = [
     "HistoricalChainBackfill",
     "HistoricalContract",
     "ReconstructionReport",
+    "candles_to_epoch_frame",
+    "contracts_from_frame",
     "plan_snapshot_epochs",
     "reconstruct_chain",
+    "spot_lookup_from_candles",
 ]
