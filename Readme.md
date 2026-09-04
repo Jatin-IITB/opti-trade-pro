@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
 ![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![Tests 598](https://img.shields.io/badge/tests-598%20passed-brightgreen)
+![Tests 1167](https://img.shields.io/badge/tests-1167%20passed-brightgreen)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 **A production-grade autonomous volatility desk** — from option pricing through
 risk-controlled paper trading to an LLM-augmented research loop — built as two
-strictly layered packages with 23 architecture decision records, a fail-closed
-risk engine, and 571 deterministic tests enforcing every quantitative claim.
+strictly layered packages with 28 architecture decision records, a fail-closed
+risk engine, and 1167 deterministic tests enforcing every quantitative claim.
 
 > Every number in this README names the test that checks it (CLAUDE.md rule 8).
 
@@ -100,10 +100,10 @@ Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 | Analyst panel | `options_trading` | Surfaces the deterministic analysts over the desk journal, rendering the auditor's verdict and cited sequence numbers beside every claim. Partial coverage is reported: an analyst whose event type is absent is listed with what it needed, and the query-driven risk officer is named as deliberately off the roster | `test_analyst_service.py`, `test_analyst_routes.py` |
 
 This table is a module inventory, not a claim about what the web app surfaces.
-`optitrade.agents`, `optitrade.audit`, `optitrade.research` and
-`optitrade.attribution` currently have **no `options_trading` imports** — they
-are reachable from the CLI, the MCP server and tests, but no dashboard panel
-renders them. [docs/roadmap.md](docs/roadmap.md) tracks reach per phase.
+`optitrade.research` and `optitrade.attribution` still have **no
+`options_trading` imports** — they are reachable from the CLI, the MCP server
+and tests, but no dashboard panel renders them.
+[docs/roadmap.md](docs/roadmap.md) tracks reach per phase.
 
 ## Quick start
 
@@ -114,7 +114,7 @@ optitrade demo         # end-to-end: chain → surface → Greeks → debate →
 optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
 optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # 1097 tests, deterministic (seeded RNGs, no network)
+pytest -q              # 1167 tests, deterministic (seeded RNGs, no network)
 pytest -q -m benchmark # latency targets (run locally)
 ```
 
