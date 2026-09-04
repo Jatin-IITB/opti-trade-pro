@@ -326,6 +326,17 @@ class Settings(BaseSettings):
             "in past cycle records stay resolvable (ADR-009)."
         ),
     )
+    desk_journal_run_id: str = Field(
+        default="desk",
+        min_length=1,
+        description=(
+            "Run id the desk journals under, and therefore the journal the "
+            "analyst panel reads. Deliberately ONE setting with two consumers "
+            "rather than one each: the panel exists to audit what the desk "
+            "wrote, so a configuration that lets them point at different "
+            "files can only ever be a misconfiguration (ADR-028)."
+        ),
+    )
     desk_kill_switch_path: str = Field(
         default="runtime_data/HALT",
         description=(
@@ -402,13 +413,10 @@ class Settings(BaseSettings):
     # four thresholds below are the analysts' own flag levels, lifted out of
     # the quant core so a deployment can retune what counts as noteworthy
     # without editing it.
-    analyst_journal_run_id: str = Field(
-        default="desk",
-        description=(
-            "Run id of the journal the analysts read. Must match the id the "
-            "desk writes under, or the panel audits an empty journal."
-        ),
-    )
+    # The run id is NOT duplicated here. The analysts read the desk's journal,
+    # so they take `desk_journal_run_id`; a separate `analyst_journal_run_id`
+    # existed briefly and could only ever drift out of step with the desk,
+    # which made the panel report an empty desk that had in fact run (ADR-028).
     analyst_refresh_seconds: float = Field(
         default=60.0,
         gt=0,

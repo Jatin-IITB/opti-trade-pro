@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
 ![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![Tests 1167](https://img.shields.io/badge/tests-1167%20passed-brightgreen)
+![Tests 1188](https://img.shields.io/badge/tests-1188%20passed-brightgreen)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 **A production-grade autonomous volatility desk** — from option pricing through
 risk-controlled paper trading to an LLM-augmented research loop — built as two
 strictly layered packages with 28 architecture decision records, a fail-closed
-risk engine, and 1167 deterministic tests enforcing every quantitative claim.
+risk engine, and 1188 deterministic tests enforcing every quantitative claim.
 
 > Every number in this README names the test that checks it (CLAUDE.md rule 8).
 
@@ -114,7 +114,7 @@ optitrade demo         # end-to-end: chain → surface → Greeks → debate →
 optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
 optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # 1167 tests, deterministic (seeded RNGs, no network)
+pytest -q              # 1188 tests, deterministic (seeded RNGs, no network)
 pytest -q -m benchmark # latency targets (run locally)
 ```
 

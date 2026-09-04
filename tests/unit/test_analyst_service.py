@@ -98,6 +98,152 @@ class TestNoJournal:
         assert "desk" in wire["reason"].lower()
 
 
+class TestRunIdMismatchIsDistinguishable:
+    """An idle desk and a misconfigured panel must not read the same.
+
+    Both leave the configured journal absent, so before this the payload was
+    identical and the message — "run a desk cycle from the Desk tab and this
+    panel fills in" — was actively wrong for the second: every cycle writes to
+    the journal the configured id does not read. A panel whose purpose is
+    making unfounded prose visible must not emit any.
+    """
+
+    @pytest.fixture()
+    def mismatched(self, tmp_path):
+        journal = _journal(tmp_path, "desk")
+        for _ in range(3):
+            journal.append("market_features", dict(FULL_FEATURES))
+        return AnalystService(
+            tmp_path / "journal", AnalystServiceConfig(journal_run_id="desk-prod")
+        ).build()
+
+    @pytest.fixture()
+    def idle(self, tmp_path):
+        # Its own directory: sharing tmp_path with the `mismatched` fixture
+        # would let this one find that one's journal and report a running desk.
+        directory = tmp_path / "idle-journal"
+        directory.mkdir()
+        return AnalystService(directory, AnalystServiceConfig(journal_run_id="desk")).build()
+
+    def test_the_mismatch_is_flagged(self, mismatched):
+        assert mismatched.run_id_mismatch is True
+
+    def test_an_idle_desk_is_not_flagged_as_a_mismatch(self, idle):
+        assert idle.run_id_mismatch is False
+        assert idle.available_run_ids == ()
+
+    def test_the_two_states_do_not_share_a_reason(self, mismatched, idle):
+        assert mismatched.reason != idle.reason
+
+    def test_the_mismatch_does_not_prescribe_running_a_cycle(self, mismatched):
+        """The remedy that can never work must not be offered."""
+        assert "Run a desk cycle from the Desk tab" not in (mismatched.reason or "")
+        assert "will not fill this panel" in mismatched.reason
+
+    def test_the_mismatch_names_the_journals_it_found(self, mismatched):
+        assert mismatched.available_run_ids == ("desk",)
+        assert "'desk'" in mismatched.reason
+
+    def test_the_mismatch_names_the_setting_to_change(self, mismatched):
+        assert "DESK_JOURNAL_RUN_ID" in mismatched.reason
+
+    def test_the_mismatch_warns(self, mismatched, idle):
+        assert mismatched.warnings, "a misconfiguration is worth a warning"
+        assert idle.warnings == (), "an idle desk is not a problem to warn about"
+
+    def test_events_seen_stays_zero_because_none_were_read(self, mismatched):
+        """The three events on disk are real, but not in this journal."""
+        assert mismatched.events_seen == 0
+        assert mismatched.has_journal is False
+
+    def test_several_other_run_ids_are_all_named(self, tmp_path):
+        for run_id in ("desk-prod", "desk-staging", "desk"):
+            _journal(tmp_path, run_id).append("market_features", dict(FULL_FEATURES))
+        payload = AnalystService(
+            tmp_path / "journal", AnalystServiceConfig(journal_run_id="absent")
+        ).build()
+        assert payload.available_run_ids == ("desk", "desk-prod", "desk-staging")
+
+    def test_an_empty_configured_journal_beside_a_populated_one_is_flagged(self, tmp_path):
+        """The empty-file branch prescribes a cycle too, so it needs the check."""
+        _journal(tmp_path, "desk").append("market_features", dict(FULL_FEATURES))
+        (tmp_path / "journal" / "desk-prod.jsonl").write_text("", encoding="utf-8")
+        payload = AnalystService(
+            tmp_path / "journal", AnalystServiceConfig(journal_run_id="desk-prod")
+        ).build()
+        assert payload.run_id_mismatch is True
+        assert "desk" in payload.reason
+
+    def test_the_matching_run_id_reads_the_events(self, tmp_path):
+        """The control: the same directory, the right id, three events."""
+        journal = _journal(tmp_path, "desk")
+        for _ in range(3):
+            journal.append("market_features", dict(FULL_FEATURES))
+        payload = AnalystService(
+            tmp_path / "journal", AnalystServiceConfig(journal_run_id="desk")
+        ).build()
+        assert payload.has_journal is True
+        assert payload.events_seen == 3
+        assert payload.run_id_mismatch is False
+
+    def test_the_flag_reaches_the_wire(self, mismatched):
+        wire = mismatched.to_wire_dict()
+        assert wire["runIdMismatch"] is True
+        assert wire["availableRunIds"] == ["desk"]
+
+
+class TestZeroClaimReportIsNotAllGrounded:
+    """A report that audited nothing is unaudited, not perfect.
+
+    Currently unreachable — every roster analyst builds at least one claim
+    unconditionally — so this pins the intent against a hand-built report. The
+    trap it closes: ``claimsGrounded == claimsTotal`` is trivially true at 0,
+    which drew a green "all grounded" badge over prose citing nothing.
+    """
+
+    @pytest.fixture()
+    def wire(self, tmp_path):
+        from options_trading.services.analyst_service import _report_wire
+        from optitrade.audit.groundedness import GroundednessReport
+        from optitrade.desk.analysts import AnalystReport
+
+        return _report_wire(
+            AnalystReport(
+                analyst="regime_analyst",
+                text="a paragraph asserting nothing checkable",
+                claims=(),
+                groundedness=GroundednessReport(verdicts=()),
+            )
+        )
+
+    def test_the_rate_is_unmeasured_not_perfect(self, wire):
+        """Consistent with unavailable_analysts_wire: None, not 0.0 or 1.0."""
+        assert wire["groundedRate"] is None
+
+    def test_the_counts_are_zero(self, wire):
+        assert wire["claimsTotal"] == 0
+        assert wire["claimsGrounded"] == 0
+
+    def test_the_core_still_calls_an_empty_batch_grounded(self, tmp_path):
+        """Documents the divergence, so it reads as deliberate.
+
+        ``GroundednessReport.grounded_rate`` returns 1.0 for an empty batch
+        ("nothing failed"), which is right for an auditor. It is wrong for a
+        panel, where the number is displayed as a measurement.
+        """
+        from optitrade.audit.groundedness import GroundednessReport
+
+        assert GroundednessReport(verdicts=()).grounded_rate == 1.0
+
+    def test_every_roster_analyst_makes_at_least_one_claim(self, tmp_path, config):
+        """Why this is a latent trap rather than a live bug."""
+        journal = _journal(tmp_path)
+        journal.append("market_features", dict(FULL_FEATURES))
+        payload = _service(tmp_path, config).build()
+        assert all(a["claimsTotal"] >= 1 for a in payload.analysts)
+        assert all(a["groundedRate"] is not None for a in payload.analysts)
+
+
 class TestPartialCoverage:
     """One event type present, two absent — the state on a real desk today."""
 
@@ -374,17 +520,52 @@ class TestConfigDrivesTheAnalysts:
         from options_trading.services.analyst_service import analyst_config_from_settings
 
         cfg = analyst_config_from_settings()
-        assert cfg.journal_run_id == settings.analyst_journal_run_id
+        assert cfg.journal_run_id == settings.desk_journal_run_id
         assert cfg.high_vrp == settings.analyst_high_vrp
         assert cfg.refresh_seconds == settings.analyst_refresh_seconds
 
     def test_the_run_id_selects_the_journal(self, tmp_path):
-        """A mismatched run id must not silently audit an empty journal."""
+        """A mismatched run id must not be reported as an idle desk.
+
+        This previously asserted only ``has_journal is False``, which is what
+        a legitimately-empty desk returns too — so it passed while the panel
+        told users to run a desk cycle that could never fill it. The point of
+        the run id is the *distinction*, so that is what is asserted.
+        """
         _journal(tmp_path, "desk").append("market_features", dict(FULL_FEATURES))
         other = AnalystService(
             tmp_path / "journal", AnalystServiceConfig(journal_run_id="not-the-desk")
         ).build()
+
         assert other.has_journal is False
+        assert other.run_id_mismatch is True, "a mismatch must be distinguishable"
+        assert other.available_run_ids == ("desk",), "and must name what it found"
+        assert "not-the-desk" in other.reason
+        assert "'desk'" in other.reason
+
+    def test_the_settings_factory_pins_both_services_to_one_run_id(self):
+        """The two configs cannot diverge, because there is one setting.
+
+        The mismatch above was reachable in deployment: the analyst run id was
+        settings-driven while ``DeskServiceConfig.journal_run_id`` was a
+        hardcoded default its factory never set, so a user could move the
+        panel but never the desk.
+        """
+        from options_trading.config.settings import settings
+        from options_trading.services.analyst_service import analyst_config_from_settings
+        from options_trading.services.desk_service import desk_config_from_settings
+
+        assert (
+            analyst_config_from_settings().journal_run_id
+            == desk_config_from_settings().journal_run_id
+            == settings.desk_journal_run_id
+        )
+
+    def test_there_is_no_analyst_specific_run_id_setting(self):
+        """A second setting would restore the ability to drift apart."""
+        from options_trading.config.settings import settings
+
+        assert not hasattr(settings, "analyst_journal_run_id")
 
 
 class TestCaching:

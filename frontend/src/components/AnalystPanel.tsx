@@ -43,7 +43,8 @@ interface Report {
   claims: Claim[];
   claimsTotal: number;
   claimsGrounded: number;
-  groundedRate: number;
+  /** Null when the analyst made no numeric claims: nothing was audited. */
+  groundedRate: number | null;
   auditSummary: string;
 }
 
@@ -65,6 +66,9 @@ interface AnalystData {
   reason?: string | null;
   runId?: string;
   eventsSeen?: number;
+  /** The configured run id has no journal, but other run ids do. */
+  runIdMismatch?: boolean;
+  availableRunIds?: string[];
   groundedRate?: number | null;
   claimsTotal?: number;
   claimsGrounded?: number;
@@ -87,7 +91,15 @@ export function AnalystPanel({ data }: Props) {
   // that would mean showing sentences with no journal behind them, which is
   // strictly worse than showing nothing.
   if (data?.hasJournal !== true) {
-    return <EmptyState reason={data?.reason} excluded={data?.excluded ?? []} />;
+    return (
+      <EmptyState
+        reason={data?.reason}
+        excluded={data?.excluded ?? []}
+        mismatch={data?.runIdMismatch === true}
+        configuredRunId={data?.runId}
+        availableRunIds={data?.availableRunIds ?? []}
+      />
+    );
   }
 
   const reports = data.analysts ?? [];
@@ -234,7 +246,12 @@ function GroundedRate({
 }
 
 function ReportCard({ report }: { report: Report }) {
-  const allGrounded = report.claimsGrounded === report.claimsTotal;
+  // An analyst with no claims is NOT "all grounded". `claimsGrounded ===
+  // claimsTotal` is trivially true at 0, which drew a green badge over prose
+  // that cited nothing; a zero-claim report is unaudited, and neither green
+  // nor red describes it.
+  const audited = report.claimsTotal > 0;
+  const allGrounded = audited && report.claimsGrounded === report.claimsTotal;
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -249,12 +266,16 @@ function ReportCard({ report }: { report: Report }) {
           )}
           <span
             className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-              allGrounded
-                ? "bg-emerald-500/15 text-emerald-300"
-                : "bg-rose-500/15 text-rose-300"
+              !audited
+                ? "bg-slate-700/50 text-slate-400"
+                : allGrounded
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-rose-500/15 text-rose-300"
             }`}
           >
-            {report.claimsGrounded}/{report.claimsTotal} grounded
+            {audited
+              ? `${report.claimsGrounded}/${report.claimsTotal} grounded`
+              : "no claims audited"}
           </span>
         </div>
       </div>
@@ -375,20 +396,46 @@ function ExcludedList({ excluded }: { excluded: Excluded[] }) {
 function EmptyState({
   reason,
   excluded,
+  mismatch,
+  configuredRunId,
+  availableRunIds,
 }: {
   reason?: string | null;
   excluded: Excluded[];
+  mismatch: boolean;
+  configuredRunId?: string;
+  availableRunIds: string[];
 }) {
+  // A misconfiguration and an idle desk both leave this panel empty, but only
+  // one of them is fixed by waiting. Rendering them identically told users to
+  // "run a desk cycle" when every cycle they ran wrote to a journal this
+  // panel was not reading.
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-semibold text-slate-100">Analysts</h2>
-      <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-8">
+      <div
+        className={`rounded-xl border p-8 ${
+          mismatch
+            ? "border-amber-500/40 bg-amber-500/5"
+            : "border-slate-700 bg-slate-800/50"
+        }`}
+      >
         <div className="mx-auto flex max-w-lg flex-col items-center text-center">
-          <div className="mb-4 rounded-full bg-slate-700/50 p-3">
-            <FileSearch className="h-6 w-6 text-slate-400" />
+          <div
+            className={`mb-4 rounded-full p-3 ${
+              mismatch ? "bg-amber-500/15" : "bg-slate-700/50"
+            }`}
+          >
+            {mismatch ? (
+              <AlertTriangle className="h-6 w-6 text-amber-400" />
+            ) : (
+              <FileSearch className="h-6 w-6 text-slate-400" />
+            )}
           </div>
           <h3 className="mb-2 text-base font-medium text-slate-200">
-            Nothing journaled to analyse yet
+            {mismatch
+              ? "This panel is reading the wrong journal"
+              : "Nothing journaled to analyse yet"}
           </h3>
           <p className="text-sm leading-relaxed text-slate-400">
             {reason ??
@@ -396,10 +443,26 @@ function EmptyState({
                 "the paper desk's event journal, so this panel fills in once a " +
                 "desk cycle has run."}
           </p>
+
+          {mismatch && (
+            <dl className="mt-5 w-full space-y-1.5 rounded-lg bg-slate-900/50 p-3 text-left font-mono text-xs">
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">configured run id</dt>
+                <dd className="text-amber-300">{configuredRunId || "—"}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-slate-500">journals on disk</dt>
+                <dd className="text-slate-300">
+                  {availableRunIds.join(", ") || "—"}
+                </dd>
+              </div>
+            </dl>
+          )}
+
           <p className="mt-6 text-xs leading-relaxed text-slate-500">
-            No analyst text is shown rather than a sample report — prose
-            asserting numbers with no journal behind it is indistinguishable
-            from a real finding.
+            {mismatch
+              ? "No analyst text is shown because none of it would be about the desk you are running."
+              : "No analyst text is shown rather than a sample report — prose asserting numbers with no journal behind it is indistinguishable from a real finding."}
           </p>
         </div>
       </div>

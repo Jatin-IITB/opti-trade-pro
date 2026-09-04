@@ -275,6 +275,28 @@ class TestFrontendContract:
         assert 'id: "analysts"' in source
         assert 'activeTab === "analysts"' in source
 
+    def test_a_zero_claim_report_is_not_badged_all_grounded(self):
+        """``claimsGrounded === claimsTotal`` is trivially true at 0.
+
+        Guarded in the source because the bug is a green badge over prose
+        that cited nothing, which no type checker would catch.
+        """
+        source = self._src("components/AnalystPanel.tsx")
+        assert "report.claimsTotal > 0" in source
+        assert "no claims audited" in source
+        assert "allGrounded = audited &&" in source
+
+    def test_the_panel_distinguishes_a_run_id_mismatch(self):
+        """An idle desk and a misconfigured panel must not render alike."""
+        source = self._src("components/AnalystPanel.tsx")
+        assert "runIdMismatch" in source
+        assert "reading the wrong journal" in source
+        assert "availableRunIds" in source
+
+    def test_the_grounded_rate_type_admits_null(self):
+        source = self._src("components/AnalystPanel.tsx")
+        assert "groundedRate: number | null;" in source
+
 
 class TestPaperOnlyInvariant:
     """The app is read-only against a real account; this must not change it."""

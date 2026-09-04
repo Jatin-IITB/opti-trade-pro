@@ -146,3 +146,86 @@ on these rails, which is what it is built for.
 orchestrator's `llm` tier is left empty rather than populated with analysts
 that would report an unavailable backend as a failure — noise, not
 information.
+
+## Amendment (2026-09-04): one run id, and a message that is true
+
+Review found the panel emitting an unfounded claim of its own — the single bug
+that undercuts a feature whose purpose is making unfounded prose visible. Two
+changes follow.
+
+### The desk's run id is settings-driven, and it is the *same* setting
+
+As first written, `analyst_journal_run_id` was settings-driven and
+env-overridable while `DeskServiceConfig.journal_run_id` was a hardcoded
+dataclass default that `desk_config_from_settings()` never set. The two could
+therefore only ever *diverge*: a user could move the panel but not the desk.
+
+Adding a matching `desk_journal_run_id` alongside it would have made them
+divergeable in both directions, which is not the property wanted. There is
+exactly one relationship here — the panel audits what the desk wrote — so
+there is now exactly one setting, `desk_journal_run_id`, with two consumers.
+`analyst_journal_run_id` is deleted (ADR-011); a test asserts it has not come
+back, because its return would silently restore the drift.
+
+The mismatch is now reachable only by constructing configs by hand, which is
+also precisely when a diagnostic is worth having.
+
+### A mismatch and an idle desk are different states
+
+Both leave the configured journal absent, and the payload could not tell them
+apart. So a panel pointed at a run id the desk does not write reported:
+
+> "The desk has not journaled anything yet … Run a desk cycle from the Desk
+> tab and this panel fills in."
+
+False on both counts, and the remedy could never work: every cycle appends to
+the journal that configuration does not read. The state was indistinguishable
+from a genuinely empty desk.
+
+The payload now carries `runIdMismatch` and `availableRunIds`, set by scanning
+the journal directory for sibling `*.jsonl` files. When the configured id has
+no journal but others exist, the reason names the configured id, names what
+was found, states that more cycles will not help, and names the setting to
+change. The panel renders that as a configuration warning rather than the
+neutral "waiting for data" state, because only one of the two is fixed by
+waiting.
+
+`unavailable_analysts_wire` reports `runIdMismatch: false` with no run ids:
+the failure that produced that payload may be the very thing that stopped the
+directory being readable, so it claims no diagnosis.
+
+### A zero-claim report is unaudited, not perfect
+
+`_report_wire` returned `groundedRate: 1.0` for an analyst that made no
+claims, contradicting `unavailable_analysts_wire`'s own reasoning eleven lines
+above it ("no claims were audited, and both numbers would be read as a
+measurement"). Worse, `claimsGrounded === claimsTotal` is trivially true at
+zero, so the panel drew a green "all grounded" badge over prose that had cited
+nothing.
+
+Per-analyst `groundedRate` is now `None` when nothing was audited, and the
+badge reads "no claims audited" in neutral grey. This deliberately diverges
+from `GroundednessReport.grounded_rate`, which returns 1.0 for an empty batch
+— correct for an auditor ("nothing failed"), wrong for a panel that displays
+the number as a measurement. A test documents the divergence so it reads as
+chosen rather than overlooked.
+
+Unreachable today: all three roster analysts build at least one claim
+unconditionally. A test pins that fact too, so the trap's closure does not
+depend on it staying true.
+
+### On replay count (raised in review, declined)
+
+`_build_uncached` replays the journal to count events before the orchestrator
+replays it again. That extra pass is retained deliberately:
+`EventLog.replay()` is strict about corruption and `AnalystOrchestrator` is
+fail-**open**, so removing the gate would turn a malformed journal into "three
+analysts failed" with `hasJournal: true` instead of an unreadable journal —
+losing the fail-closed boundary (ADR-008) in front of the fail-open layer.
+
+The remaining passes (one per analyst `_latest_event`, one per self-audit, one
+overall audit) are inside the quant core. Collapsing them means changing
+`optitrade.desk.analysts` and `optitrade.agents.orchestrator` to accept
+materialised events — rebuilding the core rather than wiring it. The cache is
+what bounds the cost: the work runs once per journal append, not once per
+dashboard tick.
