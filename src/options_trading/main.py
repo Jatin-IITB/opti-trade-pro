@@ -126,7 +126,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         history=history_analytics,
         desk=desk_service,
         analysts=analyst_service,
+        store=SnapshotStore(Path(settings.snapshot_store_path)),
     )
+
+    # Seed the dashboard from the last stored capture so a restart outside
+    # market hours shows the market as it last was, labelled stale, rather
+    # than nothing at all until the next trading day. Reads local disk only:
+    # no broker call, no token, so it runs before and regardless of auth.
+    await app.state.live_pipeline.warm_start_from_store()
 
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")

@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from optitrade.data import SnapshotStore
 from optitrade.data.models import RawChain
 
 from .analyst_service import AnalystService, unavailable_analysts_wire
+from .capture_scheduler import ScheduleConfig, is_market_open
 from .capture_service import CaptureReport
 from .desk_service import DeskService, unavailable_desk_wire
 from .history_analytics import HistoryAnalytics, unavailable_history_wire
@@ -34,6 +39,53 @@ logger = logging.getLogger(__name__)
 class LivePipelineConfig:
     underlying: str = "NIFTY"
     vol_model: str = "essvi"
+    #: Exchange calendar, used only to describe a restored snapshot. It says
+    #: whether a stored capture is a session's final one or was taken well
+    #: before the close, which is the difference between "closing prices" and
+    #: "the last prices we happened to catch".
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+
+
+def describe_stored_snapshot(
+    snapshot_ts: float,
+    now: float,
+    config: ScheduleConfig,
+) -> str:
+    """One sentence naming which session's prices a restored payload holds.
+
+    Composed here rather than in the browser because the exchange calendar is
+    server-side, and because the honest wording depends on a fact only this
+    side knows: whether the snapshot is the session's last capture or one
+    taken well before the close. Calling a 14:02 capture "closing prices"
+    would be false, and it is exactly the kind of falsehood that survives
+    review because it reads so naturally.
+
+    ``now`` is injected rather than read from the clock so the wording is
+    testable at fixed instants.
+    """
+    zone = ZoneInfo(config.timezone)
+    stamp = datetime.fromtimestamp(snapshot_ts, tz=zone)
+    when = f"{stamp:%a %-d %b %Y, %H:%M} {stamp:%Z}"
+
+    if is_market_open(now, config):
+        return (
+            f"No capture has run yet this session. These are the last stored prices, from {when}."
+        )
+
+    close_time = datetime.strptime(config.market_close, "%H:%M").time()
+    close = datetime.combine(stamp.date(), close_time, tzinfo=zone)
+    shortfall = (close - stamp).total_seconds()
+
+    # Within one capture interval of the close, this *is* the session's last
+    # word: no further capture was due before trading stopped.
+    if shortfall <= config.interval_seconds:
+        return f"Market closed. These are the session's closing prices, from {when}."
+
+    return (
+        f"Market closed. These are the last prices captured, at {when} — "
+        f"{int(shortfall // 60)} minutes before the {config.market_close} close, "
+        f"so the session's final moves are not included."
+    )
 
 
 class LivePipelineService:
@@ -47,6 +99,7 @@ class LivePipelineService:
         history: HistoryAnalytics | None = None,
         desk: DeskService | None = None,
         analysts: AnalystService | None = None,
+        store: SnapshotStore | None = None,
     ) -> None:
         """``book_fn`` supplies the user's synced book, if any.
 
@@ -67,6 +120,10 @@ class LivePipelineService:
         ``analysts`` supplies the analyst panel. Read-only against the same
         journal the desk writes, so it is safe on this path for the same
         reason the desk read is.
+
+        ``store`` enables :meth:`warm_start_from_store`. Without it the
+        dashboard stays empty until the first capture of the process, which
+        outside market hours means empty until the next trading day.
         """
         self._ws_manager = ws_manager
         self._config = config
@@ -75,6 +132,7 @@ class LivePipelineService:
         self._history = history
         self._desk = desk
         self._analysts = analysts
+        self._store = store
         self._last_payload: LiveDashboardPayload | None = None
         self._last_chain: RawChain | None = None
 
@@ -186,20 +244,91 @@ class LivePipelineService:
         """Cache the latest RawChain from a capture cycle for analytics."""
         self._last_chain = chain
 
+    async def warm_start_from_store(self, now: float | None = None) -> bool:
+        """Seed the dashboard from the newest stored capture, flagged not-live.
+
+        The live payload lives only in this process's memory, so a restart
+        discards it even though the captures themselves are on disk. Outside
+        market hours — most of the week — the next capture that could refill
+        it is a trading day away, and the dashboard would show nothing at all
+        while a full chain sat in the snapshot store unread.
+
+        The restored payload is flagged ``is_live=False`` and carries a note
+        naming the session it describes. It is deliberately **not** cached as
+        ``_last_chain``: ``on_capture`` rebuilds from that field, so seeding it
+        would let a capture cycle that never called ``cache_chain`` rebroadcast
+        this old chain as live. Warm start feeds the display path only.
+
+        Best effort — a failure here must never stop the app serving, so it
+        returns False and leaves the dashboard empty rather than raising.
+        """
+        if self._store is None:
+            return False
+        try:
+            paths = self._store.list_snapshots(self._config.underlying)
+        except Exception:
+            logger.exception("Could not list stored snapshots; dashboard starts empty")
+            return False
+        if not paths:
+            logger.info(
+                "No stored capture for %s yet; dashboard starts empty until the "
+                "first capture of this session",
+                self._config.underlying,
+            )
+            return False
+
+        newest = paths[-1]
+        try:
+            chain = await asyncio.to_thread(self._store.read, newest)
+            payload = await asyncio.to_thread(
+                self._analytics.build_from_raw_chain, chain, self._current_book()
+            )
+        except Exception:
+            logger.exception("Could not restore %s; dashboard starts empty", newest)
+            return False
+
+        self._last_payload = replace(
+            payload,
+            is_live=False,
+            as_of_note=describe_stored_snapshot(
+                chain.timestamp,
+                time.time() if now is None else now,
+                self._config.schedule,
+            ),
+        )
+        logger.info(
+            "Dashboard warm-started from %s (spot %.1f), flagged not-live",
+            newest.name,
+            chain.spot,
+        )
+        return True
+
     def get_latest_snapshot(self) -> LiveDashboardPayload | None:
-        """Return the most recent payload, or None if no capture has run yet."""
+        """Return the most recent payload, or None if nothing has been built yet.
+
+        May be a warm-started payload describing a past instant; callers that
+        render it must respect its ``is_live`` flag.
+        """
         return self._last_payload
 
     def get_latest_spot(self) -> float | None:
-        """Underlying level from the most recent capture, or None before the first.
+        """Underlying level from the most recent *live* capture, else None.
 
         This is the app's single source of live spot. Portfolio Greeks and
         moneyness depend on it, so it returns None rather than 0.0 when no
         capture has run — callers must treat "unknown" differently from "zero".
+
+        A warm-started payload is explicitly excluded. Its spot is real but
+        old, and pricing today's book against a previous session's underlying
+        would relabel moneyness and misstate every Greek while looking
+        entirely normal — the same class of error as pricing a 24500 strike
+        against a spot of a few thousand. Display may be stale; the money path
+        may not.
         """
-        if self._last_payload is None or self._last_payload.spot <= 0:
+        payload = self._last_payload
+        if payload is None or not payload.is_live or payload.spot <= 0:
             return None
-        return self._last_payload.spot
+        return payload.spot
 
 
-__all__ = ["LivePipelineConfig", "LivePipelineService"]
+__all__ = ["LivePipelineConfig", "LivePipelineService", "describe_stored_snapshot"]

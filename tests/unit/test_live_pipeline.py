@@ -121,6 +121,11 @@ class TestWireFormat:
         "timestamp",
         "underlying",
         "spot",
+        # Freshness. Always emitted: the frontend fails closed and treats
+        # anything but an explicit isLive=true as not current, so a payload
+        # that dropped these would wear a "market closed" notice forever.
+        "isLive",
+        "asOfNote",
     }
 
     def test_wire_dict_uses_camel_case(self):

@@ -75,6 +75,21 @@ class LiveDashboardPayload:
     timestamp: float = 0.0
     underlying: str = ""
     spot: float = 0.0
+    is_live: bool = True
+    as_of_note: str | None = None
+    """What instant this payload describes, set only when ``is_live`` is False.
+
+    A payload restored from the snapshot store describes a real past instant.
+    Outside market hours that is the only thing there is to render, and it is
+    a normal state rather than a fault — so the note says which session's
+    prices these are, not that something went wrong.
+
+    Composed server-side because the exchange calendar lives here: only this
+    process knows whether a snapshot is a session's final capture or one taken
+    an hour before the close, and the difference is the whole point. The
+    frontend renders the sentence verbatim rather than re-deriving it from a
+    timestamp in the browser's timezone.
+    """
 
     def to_wire_dict(self) -> dict[str, Any]:
         """Serialize to the camelCase keys the frontend reads.
@@ -84,6 +99,10 @@ class LiveDashboardPayload:
         ``request_snapshot``, ``GET /dashboard/live/snapshot``) go through
         here. ``dataclasses.asdict`` must never be used on the wire — it
         emits snake_case keys the frontend silently discards.
+
+        ``isLive`` is always emitted. A restored payload that omitted it would
+        render identically to a live one, which is the whole failure this
+        field exists to prevent.
         """
         return {
             "volSurface": self.vol_surface,
@@ -96,6 +115,8 @@ class LiveDashboardPayload:
             "timestamp": self.timestamp,
             "underlying": self.underlying,
             "spot": self.spot,
+            "isLive": self.is_live,
+            "asOfNote": self.as_of_note,
         }
 
 

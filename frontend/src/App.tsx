@@ -23,6 +23,7 @@ import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
 import { PnlWaterfall } from "./components/PnlWaterfall";
 import { HigherOrderGreeks } from "./components/HigherOrderGreeks";
 import { OptionChain } from "./components/OptionChain";
+import { SnapshotNotice } from "./components/SnapshotNotice";
 import { GreeksBook } from "./components/GreeksBook";
 import { EssviCalibration } from "./components/EssviCalibration";
 import { BacktestEquity } from "./components/BacktestEquity";
@@ -324,6 +325,15 @@ export default function App() {
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-[1200px] mx-auto px-6 py-6">
             <ErrorBoundary>
+              {/* Sits above every tab, not just the market ones: when the
+                  payload is a warm-started capture, the chain, surface,
+                  Greeks and risk panels are all describing the same past
+                  instant, so the dateline belongs once at the top rather
+                  than repeated per panel. */}
+              <SnapshotNotice
+                marketIsLive={live.marketIsLive}
+                note={live.asOfNote}
+              />
               {/* Market panels are computed from a captured chain, so each
                   waits for the first capture rather than rendering the
                   bundled sample chain that used to stand in for one. */}

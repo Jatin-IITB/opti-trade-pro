@@ -37,7 +37,24 @@ interface LiveState {
   spot: number | null;
   underlying: string;
   lastUpdate: number | null;
+  /** Socket liveness: an update has arrived and the connection is open. */
   isLive: boolean;
+  /**
+   * Whether the market payload describes the *current* market.
+   *
+   * A different question from `isLive` above. The server keeps its payload in
+   * memory only, so a restart outside market hours serves the last stored
+   * capture instead of nothing — a healthy socket delivering real but old
+   * data. Rendering that identically to live data is exactly the confusion
+   * this field prevents.
+   */
+  marketIsLive: boolean;
+  /**
+   * The server's description of which session's prices these are, shown
+   * verbatim. Composed server-side because only that side knows the exchange
+   * calendar, and so the browser's timezone cannot restate the instant wrongly.
+   */
+  asOfNote: string | null;
 }
 
 const NO_DATA: DashboardData = {
@@ -70,6 +87,8 @@ export function useLiveData(): LiveState & {
     underlying: "NIFTY",
     lastUpdate: null,
     isLive: false,
+    marketIsLive: false,
+    asOfNote: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -141,6 +160,16 @@ export function useLiveData(): LiveState & {
             underlying: d.underlying ?? prev.underlying,
             lastUpdate: Date.now(),
             isLive: true,
+            // Fails closed: only an explicit `true` counts as live. A payload
+            // that omits the flag — an older server, a serialisation change —
+            // is treated as not current and says so, because the alternative
+            // is silently presenting Friday's chain as this morning's.
+            marketIsLive: d.isLive === true,
+            asOfNote:
+              d.isLive === true
+                ? null
+                : (d.asOfNote ??
+                  "The server did not confirm these prices are live, so they may not describe the current market."),
           }));
         }
       } catch {
