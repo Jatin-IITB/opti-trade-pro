@@ -23,6 +23,8 @@ network calls as injected callables for the same reason.
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ from optitrade.core.types import OptionType
 from optitrade.data import SnapshotStore
 from optitrade.data.models import ChainSource, RawChain, RawQuote
 
+from ..utils.exceptions import DataQualityError
 from .capture_service import IST, expiry_year_fraction
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,67 @@ class ReconstructionReport:
         return self.n_quotes / self.n_contracts if self.n_contracts else 0.0
 
 
+def implied_forward_from_parity(
+    quotes: Sequence[RawQuote],
+    rate: float,
+    *,
+    min_pairs: int = 5,
+) -> float | None:
+    """Back the forward out of put-call parity: ``F = K + (C - P)e^{rT}``.
+
+    Measured against real 2026-09-01 data, this is the only trustworthy
+    anchor available to a reconstruction. Upstox's index minute candles go
+    stale — observed holding one value across seven consecutive minutes and
+    then jumping 75 points in a single bar — so a chain anchored to the index
+    close carried an ~80 point error that did not decay even five minutes
+    before expiry, where the basis must be zero.
+
+    The options themselves are internally consistent to about 1.2 points
+    across 27 strikes, so parity across many strikes is both more accurate and
+    self-checking. The median is taken rather than the mean: one stale print
+    on an illiquid wing moves a mean and does not move a median.
+
+    Returns None when too few strikes have both legs, because a forward from
+    two pairs is a guess wearing a number's clothing.
+    """
+    by_strike: dict[float, dict[OptionType, float]] = {}
+    for quote in quotes:
+        if quote.ltp > 0.0:
+            by_strike.setdefault(quote.strike, {})[quote.option_type] = quote.ltp
+
+    forwards: list[float] = []
+    for strike, legs in by_strike.items():
+        call, put = legs.get(OptionType.CALL), legs.get(OptionType.PUT)
+        if call is None or put is None:
+            continue
+        expiry = next(q.expiry for q in quotes if q.strike == strike)
+        forwards.append(strike + (call - put) * math.exp(rate * expiry))
+
+    if len(forwards) < min_pairs:
+        return None
+    return float(statistics.median(forwards))
+
+
+def implied_spot_from_parity(
+    quotes: Sequence[RawQuote],
+    rate: float,
+    dividend_yield: float = 0.0,
+    *,
+    min_pairs: int = 5,
+) -> float | None:
+    """The spot consistent with the option-implied forward.
+
+    Stored rather than the forward itself so the field keeps the meaning the
+    live capture path gives it: downstream code computes ``F = S e^{(r-q)T}``
+    from it, and feeding a forward in would compound the carry twice.
+    """
+    forward = implied_forward_from_parity(quotes, rate, min_pairs=min_pairs)
+    if forward is None:
+        return None
+    expiry = min(q.expiry for q in quotes)
+    return forward * math.exp(-(rate - dividend_yield) * expiry)
+
+
 def _bar_at_or_before(candles: pd.DataFrame, at_epoch: float) -> tuple[float, float] | None:
     """Return ``(close, bar_epoch)`` for the latest bar at or before ``at_epoch``.
 
@@ -97,7 +161,7 @@ def reconstruct_chain(
     underlying: str,
     expiry_day: date,
     at_epoch: float,
-    spot: float,
+    spot: float | None,
     rate: float,
     contracts: Sequence[HistoricalContract],
     candles: Mapping[str, pd.DataFrame],
@@ -115,6 +179,12 @@ def reconstruct_chain(
     at all. The alternative — inventing a spread from a rule of thumb — would
     put a fabricated number into the same field a live capture fills with an
     observed one. Consumers that need a spread must check ``source`` first.
+
+    ``spot`` is the index level *if one can be trusted*; pass None to derive it
+    from put-call parity instead, which is what the backfill does. Upstox's
+    index minute candles were measured going stale for minutes at a time, and
+    a chain anchored to one mislabels every moneyness and biases every implied
+    vol while looking entirely ordinary.
     """
     quotes: list[RawQuote] = []
     n_never_traded = 0
@@ -159,9 +229,22 @@ def reconstruct_chain(
             )
         )
 
+    resolved_spot = spot
+    if resolved_spot is None:
+        resolved_spot = implied_spot_from_parity(quotes, rate, dividend_yield)
+    if resolved_spot is None or resolved_spot <= 0.0:
+        # Fails closed, matching the live path: a chain without a trustworthy
+        # spot cannot anchor moneyness or a forward, so it is not built at all
+        # rather than built around a guess.
+        raise DataQualityError(
+            f"No usable spot for {underlying} at {at_epoch}: the index feed was "
+            f"not supplied and only {len(quotes)} quotes were reconstructed, too "
+            f"few complete call/put pairs to imply a forward"
+        )
+
     chain = RawChain(
         underlying=underlying,
-        spot=spot,
+        spot=resolved_spot,
         rate=rate,
         timestamp=at_epoch,
         quotes=tuple(quotes),
@@ -202,6 +285,10 @@ class BackfillConfig:
     #: A handful of quotes is not a surface, and fitting one produces a
     #: confident-looking smile from three points.
     min_coverage: float = 0.5
+    #: Log when the parity-implied spot and the index feed disagree by more
+    #: than this fraction. Measured at ~0.35% against real 2026-09 data, where
+    #: the index feed was the one at fault, so this warns rather than rejects.
+    max_spot_divergence: float = 0.002
 
 
 @dataclass(frozen=True)
@@ -316,21 +403,37 @@ class HistoricalChainBackfill:
                 results.append(BackfillDayResult(at_epoch, False, "live capture exists", 0.0))
                 continue
 
-            spot = self._spot_fn(at_epoch)
-            if spot is None or spot <= 0.0:
-                results.append(BackfillDayResult(at_epoch, False, "no spot", 0.0))
+            # Spot comes from put-call parity, not the index feed. The index
+            # candles are still fetched, but only to cross-check: they were
+            # measured going stale for minutes at a time, so they are evidence
+            # rather than truth.
+            try:
+                chain, report = reconstruct_chain(
+                    self._config.underlying,
+                    expiry_day,
+                    at_epoch,
+                    None,
+                    self._config.rate,
+                    contracts,
+                    candles,
+                    max_bar_age_seconds=self._config.max_bar_age_seconds,
+                )
+            except DataQualityError as exc:
+                results.append(BackfillDayResult(at_epoch, False, str(exc)[:80], 0.0))
                 continue
 
-            chain, report = reconstruct_chain(
-                self._config.underlying,
-                expiry_day,
-                at_epoch,
-                spot,
-                self._config.rate,
-                contracts,
-                candles,
-                max_bar_age_seconds=self._config.max_bar_age_seconds,
-            )
+            index_spot = self._spot_fn(at_epoch)
+            if index_spot is not None and index_spot > 0.0:
+                drift = abs(chain.spot - index_spot) / index_spot
+                if drift > self._config.max_spot_divergence:
+                    logger.warning(
+                        "Implied spot %.2f differs from the index feed %.2f by %.2f%% at %s; "
+                        "keeping the implied value (the index feed is the unreliable one)",
+                        chain.spot,
+                        index_spot,
+                        drift * 100.0,
+                        datetime.fromtimestamp(at_epoch, tz=zone).isoformat(),
+                    )
             if report.coverage < self._config.min_coverage:
                 results.append(
                     BackfillDayResult(
@@ -438,6 +541,8 @@ __all__ = [
     "ReconstructionReport",
     "candles_to_epoch_frame",
     "contracts_from_frame",
+    "implied_forward_from_parity",
+    "implied_spot_from_parity",
     "plan_snapshot_epochs",
     "reconstruct_chain",
     "spot_lookup_from_candles",

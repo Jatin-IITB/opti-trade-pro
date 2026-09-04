@@ -8,6 +8,7 @@ spread, a trade that never happened, a price carried backwards in time).
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import ClassVar
 from zoneinfo import ZoneInfo
@@ -21,10 +22,13 @@ from options_trading.services.backfill_service import (
     HistoricalContract,
     candles_to_epoch_frame,
     contracts_from_frame,
+    implied_forward_from_parity,
+    implied_spot_from_parity,
     reconstruct_chain,
     spot_lookup_from_candles,
 )
 from options_trading.services.capture_service import expiry_year_fraction
+from options_trading.utils.exceptions import DataQualityError
 from optitrade.core.types import OptionType
 from optitrade.data import SnapshotStore
 from optitrade.data.models import ChainSource, RawChain, RawQuote
@@ -56,6 +60,26 @@ CONTRACTS = [
     HistoricalContract("NSE_FO|CE24000", 24000.0, OptionType.CALL),
     HistoricalContract("NSE_FO|PE24000", 24000.0, OptionType.PUT),
 ]
+
+# A realistic strip: the spot anchor comes from put-call parity, which needs
+# several complete call/put pairs, so a two-contract fixture is not a chain.
+STRIKES = tuple(range(23800, 24300, 50))
+PAIRED_CONTRACTS = [
+    HistoricalContract(f"NSE_FO|{t.value[0].upper()}E{k}", float(k), t)
+    for k in STRIKES
+    for t in (OptionType.CALL, OptionType.PUT)
+]
+
+
+def paired_candles(at: float, forward: float = 24100.0, rate: float = 0.065) -> dict:
+    """Candles whose closes satisfy parity against ``forward``."""
+    out = {}
+    for contract in PAIRED_CONTRACTS:
+        diff = math.exp(-rate * 0.011) * (forward - contract.strike)
+        put = 60.0
+        price = put + diff if contract.option_type is OptionType.CALL else put
+        out[contract.instrument_key] = bars((at, max(price, 0.05)))
+    return out
 
 
 class TestPriceSelection:
@@ -184,18 +208,19 @@ class TestOrchestration:
     def _backfill(self, tmp_path, *, candles=None, spot=24000.0, config=None, contracts=None):
         self.calls: list[str] = []
 
+        default_candles = paired_candles(epoch(15, 20))
+
         def candles_fn(key, first, last):
             self.calls.append(key)
-            if candles is None:
-                return bars((epoch(14, 0), 100.0), (epoch(15, 20), 105.0))
-            if key not in candles:
+            source = default_candles if candles is None else candles
+            if key not in source:
                 raise RuntimeError("no candles")
-            return candles[key]
+            return source[key]
 
         return HistoricalChainBackfill(
             SnapshotStore(tmp_path),
             config or BackfillConfig(snapshot_times=("15:25",)),
-            contracts_fn=lambda _k, _e: contracts if contracts is not None else CONTRACTS,
+            contracts_fn=lambda _k, _e: contracts if contracts is not None else PAIRED_CONTRACTS,
             candles_fn=candles_fn,
             spot_fn=lambda _at: spot,
             sleep_fn=lambda _s: None,
@@ -233,13 +258,16 @@ class TestOrchestration:
         assert all(store.read(p).source is ChainSource.LIVE for p in store.list_snapshots("NIFTY"))
 
     def test_a_thin_chain_is_refused(self, tmp_path) -> None:
-        """Three points make a confident-looking smile, not a surface."""
-        many = [HistoricalContract(f"K{i}", 24000.0 + 100 * i, OptionType.CALL) for i in range(10)]
-        backfill = self._backfill(
-            tmp_path,
-            contracts=many,
-            candles={"K0": bars((epoch(15, 20), 100.0))},  # 1 of 10 traded
-        )
+        """A strip is not a surface, even when it can price its own forward.
+
+        Enough pairs trade to imply a spot, so this isolates the coverage
+        floor rather than tripping the parity guard first.
+        """
+        traded = paired_candles(epoch(15, 20))
+        wide = PAIRED_CONTRACTS + [
+            HistoricalContract(f"FAR{i}", 25000.0 + 100 * i, OptionType.CALL) for i in range(30)
+        ]
+        backfill = self._backfill(tmp_path, contracts=wide, candles=traded)
 
         results = backfill.run("2026-09-08", self.DAYS, self.ZONE)
 
@@ -257,27 +285,50 @@ class TestOrchestration:
 
         backfill.run("2026-09-08", self.DAYS, self.ZONE)
 
-        assert self.calls == [c.instrument_key for c in CONTRACTS], "one fetch per contract"
+        assert self.calls == [c.instrument_key for c in PAIRED_CONTRACTS], "one fetch per contract"
 
-    def test_a_missing_spot_skips_rather_than_guesses(self, tmp_path) -> None:
+    def test_an_absent_index_feed_no_longer_blocks_a_chain(self, tmp_path) -> None:
+        """The index feed is a cross-check, not the anchor.
+
+        It was demoted after being measured going stale for minutes at a time,
+        so its absence must not stop a chain the options can price themselves.
+        """
         backfill = self._backfill(tmp_path, spot=None)
 
         results = backfill.run("2026-09-08", self.DAYS, self.ZONE)
 
-        assert [r.reason for r in results] == ["no spot"]
+        assert [r.written for r in results] == [True]
+        stored = SnapshotStore(tmp_path).list_snapshots("NIFTY")
+        assert SnapshotStore(tmp_path).read(stored[0]).spot > 0.0
+
+    def test_too_few_pairs_is_reported_not_written(self, tmp_path) -> None:
+        """Calls only: parity has nothing to solve, so no spot can be implied."""
+        calls_only = [c for c in PAIRED_CONTRACTS if c.option_type is OptionType.CALL]
+        backfill = self._backfill(
+            tmp_path,
+            contracts=calls_only,
+            candles={c.instrument_key: bars((epoch(15, 20), 100.0)) for c in calls_only},
+        )
+
+        results = backfill.run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert [r.written for r in results] == [False]
+        assert "No usable spot" in (results[0].reason or "")
         assert SnapshotStore(tmp_path).list_snapshots("NIFTY") == []
 
     def test_one_dead_contract_does_not_abandon_the_expiry(self, tmp_path) -> None:
+        partial = paired_candles(epoch(15, 20))
+        partial.pop(PAIRED_CONTRACTS[0].instrument_key)  # that fetch raises
         backfill = self._backfill(
             tmp_path,
-            candles={"NSE_FO|CE24000": bars((epoch(15, 20), 100.0))},  # PE fetch raises
+            candles=partial,
             config=BackfillConfig(snapshot_times=("15:25",), min_coverage=0.5),
         )
 
         results = backfill.run("2026-09-08", self.DAYS, self.ZONE)
 
         assert [r.written for r in results] == [True]
-        assert results[0].coverage == pytest.approx(0.5)
+        assert results[0].coverage == pytest.approx(1 - 1 / len(PAIRED_CONTRACTS))
 
     def test_no_contracts_returns_empty_rather_than_writing_nothing_silently(
         self, tmp_path
@@ -285,6 +336,82 @@ class TestOrchestration:
         backfill = self._backfill(tmp_path, contracts=[])
 
         assert backfill.run("2026-09-08", self.DAYS, self.ZONE) == []
+
+
+class TestImpliedSpotFromParity:
+    """The spot anchor comes from the options, not the index feed.
+
+    Measured against real 2026-09 data, Upstox's index minute candles hold one
+    value for minutes and then jump — leaving an ~80 point error that did not
+    decay even five minutes before expiry, where the basis must be zero. The
+    options were internally consistent to ~1.2 points across 27 strikes, so
+    parity is both the more accurate anchor and a self-checking one.
+
+    This matters beyond tidiness: spot anchors moneyness and the forward, so
+    an 80-point error biases every implied vol in the reconstructed history.
+    """
+
+    RATE = 0.065
+    T = 0.011
+
+    def _pair(self, strike: float, forward: float, extra_call: float = 0.0):
+        """Quotes that satisfy C - P = e^{-rT}(F - K) exactly."""
+        diff = math.exp(-self.RATE * self.T) * (forward - strike)
+        put = 50.0
+        call = put + diff + extra_call
+        return [
+            RawQuote(strike, self.T, OptionType.CALL, call, call, call, 1, 1),
+            RawQuote(strike, self.T, OptionType.PUT, put, put, put, 1, 1),
+        ]
+
+    def test_it_recovers_a_known_forward(self) -> None:
+        quotes = [q for k in range(23800, 24300, 50) for q in self._pair(k, 24223.32)]
+
+        assert implied_forward_from_parity(quotes, self.RATE) == pytest.approx(24223.32, abs=0.01)
+
+    def test_the_median_survives_one_bad_print(self) -> None:
+        """An illiquid wing with a stale close moves a mean, not a median."""
+        quotes = [q for k in range(23800, 24300, 50) for q in self._pair(k, 24223.32)]
+        quotes += self._pair(24350, 24223.32, extra_call=500.0)  # nonsense strike
+
+        assert implied_forward_from_parity(quotes, self.RATE) == pytest.approx(24223.32, abs=0.01)
+
+    def test_too_few_pairs_returns_none(self) -> None:
+        """A forward from two pairs is a guess wearing a number's clothing."""
+        quotes = [q for k in (24000, 24050) for q in self._pair(k, 24223.32)]
+
+        assert implied_forward_from_parity(quotes, self.RATE) is None
+
+    def test_the_spot_undoes_the_carry(self) -> None:
+        """Storing the forward would compound carry twice downstream, since
+        consumers rebuild F = S*exp((r-q)T) from this field."""
+        quotes = [q for k in range(23800, 24300, 50) for q in self._pair(k, 24223.32)]
+
+        spot = implied_spot_from_parity(quotes, self.RATE)
+
+        assert spot is not None
+        assert spot * math.exp(self.RATE * self.T) == pytest.approx(24223.32, abs=0.01)
+
+    def test_reconstruct_derives_spot_when_none_is_given(self) -> None:
+        """The forward the candles were built around comes back out."""
+        candles = paired_candles(epoch(14, 10), forward=24100.0)
+
+        chain, _ = reconstruct_chain(
+            "NIFTY", EXPIRY_DAY, epoch(14, 15), None, 0.065, PAIRED_CONTRACTS, candles
+        )
+
+        implied_forward = chain.spot * math.exp(0.065 * chain.quotes[0].expiry)
+        assert implied_forward == pytest.approx(24100.0, abs=1.0)
+
+    def test_it_fails_closed_when_the_spot_cannot_be_implied(self) -> None:
+        """Matching the live path: no trustworthy spot means no chain at all,
+        rather than a chain built around a guess."""
+        candles = {"NSE_FO|CE24000": bars((epoch(14, 10), 150.0))}
+
+        with pytest.raises(DataQualityError, match="No usable spot"):
+            reconstruct_chain(
+                "NIFTY", EXPIRY_DAY, epoch(14, 15), None, 0.065, CONTRACTS[:1], candles
+            )
 
 
 class TestPayloadAdapters:
