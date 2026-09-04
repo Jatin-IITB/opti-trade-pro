@@ -396,6 +396,68 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
+    # Analyst panel (deterministic analysts + groundedness audit)
+    # -------------------------------------------------------------------------
+    # The analysts read the desk journal and explain it; they never trade. The
+    # four thresholds below are the analysts' own flag levels, lifted out of
+    # the quant core so a deployment can retune what counts as noteworthy
+    # without editing it.
+    analyst_journal_run_id: str = Field(
+        default="desk",
+        description=(
+            "Run id of the journal the analysts read. Must match the id the "
+            "desk writes under, or the panel audits an empty journal."
+        ),
+    )
+    analyst_refresh_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Minimum seconds before the analysts re-read the journal. Also "
+            "recomputed whenever the journal file changes, so this only "
+            "bounds repeat work between appends."
+        ),
+    )
+    analyst_surface_rmse_threshold: float = Field(
+        default=0.5,
+        gt=0,
+        description=(
+            "Vol points of eSSVI fit RMSE above which the surface auditor "
+            "flags the surface as not safe to quote from"
+        ),
+    )
+    analyst_min_explained_fraction: float = Field(
+        default=0.9,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of a day's P&L the explain must decompose before the "
+            "post-mortem analyst stops flagging the residual"
+        ),
+    )
+    analyst_high_vrp: float = Field(
+        default=0.04,
+        description=(
+            "Variance risk premium (decimal vol) above which the regime "
+            "analyst flags a rich-premium regime for vol sellers"
+        ),
+    )
+    analyst_steep_term: float = Field(
+        default=0.05,
+        description=(
+            "Term-slope magnitude (decimal vol) above which the regime "
+            "analyst flags a steep or deeply inverted term structure"
+        ),
+    )
+    analyst_deep_skew: float = Field(
+        default=0.03,
+        description=(
+            "25-delta skew magnitude (decimal vol) above which the regime "
+            "analyst flags pronounced skew"
+        ),
+    )
+
+    # -------------------------------------------------------------------------
     # Financial Parameters
     # -------------------------------------------------------------------------
     risk_free_rate: float = Field(default=0.0679)

@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   FlaskConical,
+  FileSearch,
 } from "lucide-react";
 import { VolSurface } from "./components/VolSurface";
 import { ScenarioHeatmap } from "./components/ScenarioHeatmap";
@@ -31,6 +32,7 @@ import { HoldingsTable } from "./components/HoldingsTable";
 import { PortfolioSummaryPanel } from "./components/PortfolioSummary";
 import { PositionSignals } from "./components/PositionSignals";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
+import { AnalystPanel } from "./components/AnalystPanel";
 import { DeskPanel } from "./components/DeskPanel";
 import { HistoryGate } from "./components/HistoryGate";
 import { LiveGate } from "./components/LiveGate";
@@ -149,6 +151,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       { id: "vrp", label: "VRP Signal", icon: Activity },
       { id: "desk", label: "Paper Desk", icon: FlaskConical },
+      { id: "analysts", label: "Analysts", icon: FileSearch },
     ],
   },
   {
@@ -409,6 +412,12 @@ export default function App() {
                   stay reachable on a desk that has never run, so the gate
                   sits inside DeskPanel around the cycle history alone. */}
               {activeTab === "desk" && <DeskPanel data={data.desk} />}
+              {/* AnalystPanel gates itself on hasJournal, like DeskPanel:
+                  the roster and the deliberately-excluded analyst stay
+                  readable even before the desk has journaled anything. */}
+              {activeTab === "analysts" && (
+                <AnalystPanel data={data.analysts} />
+              )}
               {activeTab === "portfolio" && (
                 <div className="space-y-6">
                   <PortfolioSummaryPanel
