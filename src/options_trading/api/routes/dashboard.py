@@ -7,8 +7,15 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
 from ...models.dashboard import (
@@ -205,7 +212,11 @@ async def get_live_snapshot(request: Request) -> Any:
         raise HTTPException(status_code=503, detail="Live pipeline not initialized")
     snapshot = pipeline.get_latest_snapshot()
     if snapshot is None:
-        return JSONResponse(status_code=204, content=None)
+        # 204 carries no body, so the server derives Content-Length: 0 from the
+        # status. A JSONResponse here still writes b"null", which uvicorn
+        # rejects against that length — the connection breaks mid-response and
+        # the caller sees a truncated 204 instead of "no capture yet".
+        return Response(status_code=204)
     return await pipeline.build_wire_dict(snapshot)
 
 
