@@ -34,7 +34,8 @@ import asyncio
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +133,11 @@ def analyst_config_from_settings() -> AnalystServiceConfig:
     from options_trading.config.settings import settings
 
     return AnalystServiceConfig(
-        journal_run_id=settings.analyst_journal_run_id,
+        # The desk's run id, not an analyst-specific one. The panel audits what
+        # the desk wrote, so the two are pinned to a single setting: a config
+        # that let them differ could only ever be a misconfiguration, and it
+        # produced a panel that reported an empty desk that had run (ADR-028).
+        journal_run_id=settings.desk_journal_run_id,
         refresh_seconds=settings.analyst_refresh_seconds,
         rmse_threshold_vol_points=settings.analyst_surface_rmse_threshold,
         min_explained_fraction=settings.analyst_min_explained_fraction,
@@ -140,6 +145,11 @@ def analyst_config_from_settings() -> AnalystServiceConfig:
         steep_term=settings.analyst_steep_term,
         deep_skew=settings.analyst_deep_skew,
     )
+
+
+def _quoted(names: Sequence[str]) -> str:
+    """``('a', 'b')`` -> ``"'a', 'b'"``, for naming what was found on disk."""
+    return ", ".join(repr(name) for name in names)
 
 
 def _claim_wire(claim: Any, verdict: ClaimVerdict | None) -> dict[str, Any]:
@@ -182,7 +192,13 @@ def _report_wire(report: AnalystReport) -> dict[str, Any]:
         "claims": claims,
         "claimsTotal": len(claims),
         "claimsGrounded": grounded,
-        "groundedRate": (grounded / len(claims)) if claims else 1.0,
+        # ``None``, not 1.0, when an analyst made no numeric claims — the same
+        # reasoning as ``unavailable_analysts_wire``: nothing was audited, and
+        # both 0.0 and 1.0 read as the result of an audit. 1.0 was worse than
+        # merely wrong here, because ``claimsGrounded === claimsTotal`` is
+        # trivially true at 0 and drew a green "all grounded" badge over prose
+        # that had cited nothing at all.
+        "groundedRate": (grounded / len(claims)) if claims else None,
         "auditSummary": report.groundedness.summary(),
     }
 
@@ -209,6 +225,10 @@ def unavailable_analysts_wire(reason: str) -> dict[str, Any]:
         "reason": reason,
         "runId": "",
         "eventsSeen": 0,
+        # Unknown, not diagnosed: the failure that produced this payload may be
+        # the very thing that stopped the directory being readable.
+        "runIdMismatch": False,
+        "availableRunIds": [],
         "groundedRate": None,
         "claimsTotal": 0,
         "claimsGrounded": 0,
@@ -234,6 +254,12 @@ class AnalystPayload:
     claims_grounded: int = 0
     analysts: tuple[dict[str, Any], ...] = ()
     failures: tuple[dict[str, Any], ...] = ()
+    #: True when the configured run id has no journal but others exist here.
+    #: Carried as its own flag rather than left implicit in ``reason``: a
+    #: misconfiguration and an idle desk are different states, and only one of
+    #: them is fixed by waiting.
+    run_id_mismatch: bool = False
+    available_run_ids: tuple[str, ...] = field(default_factory=tuple)
     computed_at: float = 0.0
     warnings: tuple[str, ...] = ()
 
@@ -244,6 +270,8 @@ class AnalystPayload:
             "reason": self.reason,
             "runId": self.run_id,
             "eventsSeen": self.events_seen,
+            "runIdMismatch": self.run_id_mismatch,
+            "availableRunIds": list(self.available_run_ids),
             "groundedRate": self.grounded_rate,
             "claimsTotal": self.claims_total,
             "claimsGrounded": self.claims_grounded,
@@ -264,6 +292,17 @@ class AnalystService:
     elapsed. Use :meth:`build_async` from async code — replaying the journal
     and re-auditing every claim is proportional to the journal's length, which
     grows for the life of the desk.
+
+    **On replay count.** One report costs several full replays, not one: each
+    analyst's ``_latest_event`` scans the journal, each self-audit scans it
+    again, the orchestrator's overall audit scans it once more, and this class
+    adds one as a corruption gate (see :meth:`_build_uncached`). Only the last
+    is ours to remove, and it is load-bearing. Collapsing the rest means
+    changing ``optitrade.desk.analysts`` and
+    ``optitrade.agents.orchestrator`` to accept materialised events, which is
+    rebuilding the core rather than wiring it — and the cache is what makes
+    the cost bounded in the meantime: the work happens once per journal
+    append, not once per dashboard tick.
 
     Read-only: this service never appends to the journal.
     """
@@ -317,6 +356,26 @@ class AnalystService:
 
     def _journal_path(self) -> Path:
         return self._journal_dir / f"{self._config.journal_run_id}.jsonl"
+
+    def _other_run_ids(self) -> tuple[str, ...]:
+        """Run ids with a journal in this directory other than the configured one.
+
+        The difference between "the desk has not run" and "the desk has run
+        under a name this panel is not reading" is invisible in the payload
+        without this: both leave the configured journal absent, and the first
+        message prescribes running a desk cycle, which for the second is
+        advice that can never work.
+        """
+        try:
+            return tuple(
+                sorted(
+                    path.stem
+                    for path in self._journal_dir.glob("*.jsonl")
+                    if path.stem != self._config.journal_run_id
+                )
+            )
+        except OSError:
+            return ()
 
     def _journal_key(self) -> tuple[Any, ...]:
         """Cheap fingerprint of the journal file: appends change size and mtime.
@@ -400,7 +459,32 @@ class AnalystService:
     def _build_uncached(self) -> AnalystPayload:
         cfg = self._config
         path = self._journal_path()
+        others = self._other_run_ids()
         if not path.exists():
+            # Two different facts share this branch, and telling a user the
+            # wrong one is worse than saying nothing: "run a desk cycle" is
+            # correct advice for an empty desk and unfollowable advice for a
+            # run-id mismatch, because every new cycle writes to the file this
+            # config does not read. The panel exists to make unfounded prose
+            # visible, so it must not emit any.
+            if others:
+                return AnalystPayload(
+                    has_journal=False,
+                    run_id=cfg.journal_run_id,
+                    events_seen=0,
+                    reason=(
+                        f"No journal named {cfg.journal_run_id!r} exists, but this directory "
+                        f"holds one for {_quoted(others)}. The desk has journaled under a "
+                        f"different run id than this panel is configured to read, so running "
+                        f"more desk cycles will not fill this panel. Set "
+                        f"DESK_JOURNAL_RUN_ID to the id the desk writes."
+                    ),
+                    grounded_rate=None,
+                    run_id_mismatch=True,
+                    available_run_ids=others,
+                    computed_at=time.time(),
+                    warnings=("The analyst panel and the desk are reading different journals.",),
+                )
             return AnalystPayload(
                 has_journal=False,
                 run_id=cfg.journal_run_id,
@@ -415,18 +499,40 @@ class AnalystService:
             )
 
         journal = EventLog(self._journal_dir, cfg.journal_run_id)
+        # This replay is not redundant with the orchestrator's, despite looking
+        # it. ``EventLog.replay`` is strict about corruption, and the
+        # orchestrator is deliberately fail-OPEN — so without this gate a
+        # malformed journal would surface as "three analysts failed" with
+        # ``hasJournal: true``, rather than as an unreadable journal. Doing it
+        # here keeps the fail-closed boundary (ADR-008) in front of the
+        # fail-open layer. See the note in the class docstring on replay cost.
         events_seen = sum(1 for _ in journal.replay())
         if events_seen == 0:
+            empty_reason = (
+                "The desk journal exists but holds no events yet, so no analyst has a "
+                "fact to cite. Run a desk cycle and this panel fills in."
+            )
+            if others:
+                empty_reason = (
+                    f"The journal for run id {cfg.journal_run_id!r} exists but is empty, "
+                    f"while this directory also holds one for {_quoted(others)}. If the "
+                    f"desk is journaling under one of those, this panel is reading the "
+                    f"wrong file and more cycles will not fill it."
+                )
             return AnalystPayload(
                 has_journal=False,
                 run_id=cfg.journal_run_id,
                 events_seen=0,
-                reason=(
-                    "The desk journal exists but holds no events yet, so no analyst has a "
-                    "fact to cite. Run a desk cycle and this panel fills in."
-                ),
+                reason=empty_reason,
                 grounded_rate=None,
+                run_id_mismatch=bool(others),
+                available_run_ids=others,
                 computed_at=time.time(),
+                warnings=(
+                    ("The analyst panel may be reading a different journal than the desk.",)
+                    if others
+                    else ()
+                ),
             )
 
         report: OrchestratorReport = self._orchestrator().run_all(journal)

@@ -116,6 +116,11 @@ def desk_config_from_settings() -> DeskServiceConfig:
 
     return DeskServiceConfig(
         underlying=settings.capture_autostart_underlying,
+        # Was a hardcoded dataclass default this factory never set, so the
+        # analyst panel — which is settings-driven — could be pointed at a
+        # journal the desk would never write, and reported the desk as having
+        # never run (ADR-028). One setting, both consumers.
+        journal_run_id=settings.desk_journal_run_id,
         surface=settings.history_surface_model,
         rv_window=settings.history_rv_window,
         tenor_days=settings.history_tenor_days,
