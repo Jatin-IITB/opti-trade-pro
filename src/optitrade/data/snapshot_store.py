@@ -18,9 +18,13 @@ from pathlib import Path
 import pandas as pd
 
 from optitrade.core.types import OptionType
-from optitrade.data.models import RawChain, RawQuote
+from optitrade.data.models import ChainSource, RawChain, RawQuote
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+#: Versions this reader understands. v1 predates provenance and is read as
+#: LIVE, which is what it was: the only writer then was the capture path.
+#: Refusing v1 would strand every snapshot captured before this change.
+_READABLE_VERSIONS = frozenset({1, 2})
 
 
 class SnapshotStore:
@@ -48,6 +52,7 @@ class SnapshotStore:
         frame = pd.DataFrame(
             {
                 "schema_version": [SCHEMA_VERSION] * n,
+                "source": [chain.source.value] * n,
                 "underlying": [chain.underlying] * n,
                 "spot": [chain.spot] * n,
                 "rate": [chain.rate] * n,
@@ -75,10 +80,10 @@ class SnapshotStore:
         if frame.empty:
             raise ValueError(f"snapshot {path} contains no rows")
         version = int(frame["schema_version"].iloc[0])
-        if version != SCHEMA_VERSION:
+        if version not in _READABLE_VERSIONS:
             raise ValueError(
                 f"snapshot {path} has schema_version {version}; "
-                f"this reader supports version {SCHEMA_VERSION}"
+                f"this reader supports {sorted(_READABLE_VERSIONS)}"
             )
         rows = frame.to_dict(orient="records")
         quotes = tuple(
@@ -105,6 +110,8 @@ class SnapshotStore:
             timestamp=float(first["timestamp"]),
             quotes=quotes,
             dividend_yield=float(first["dividend_yield"]),
+            # v1 has no source column and was written only by live capture.
+            source=ChainSource(str(first["source"])) if version >= 2 else ChainSource.LIVE,
         )
 
     def list_snapshots(self, underlying: str, date: str | None = None) -> list[Path]:

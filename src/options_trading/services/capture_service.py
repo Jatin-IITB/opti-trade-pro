@@ -43,6 +43,23 @@ MIN_EXPIRY_YEARS = 1.0 / 365.0 / 24.0
 # Used only if the settings object lacks a risk_free_rate field.
 FALLBACK_RISK_FREE_RATE = 0.065
 
+
+def expiry_year_fraction(expiry_day: date, now_epoch: float) -> float:
+    """ACT/365 year fraction from ``now_epoch`` to ``expiry_day`` 15:30 IST.
+
+    Floored at :data:`MIN_EXPIRY_YEARS` (one hour) so expiry-day snapshots
+    never produce a zero or negative time-to-expiry, which would break every
+    vol solver downstream.
+
+    Module-level so the live capture path and the historical backfill share
+    one definition. Two copies of a day-count convention is two chances to
+    disagree, and a surface fitted on one and replayed against the other would
+    show the difference as a vol move nobody made.
+    """
+    expiry_epoch = datetime.combine(expiry_day, NSE_CLOSE_TIME, tzinfo=IST).timestamp()
+    return max((expiry_epoch - now_epoch) / SECONDS_PER_YEAR, MIN_EXPIRY_YEARS)
+
+
 # Authoritative Upstox chain-row field aliases (mirrors MarketDataService's mapping).
 _STRIKE_KEYS = ("strike_price", "strike", "strikePrice")
 _CALL_KEYS = ("call_options", "call_option", "CE", "call")
@@ -183,13 +200,8 @@ class UpstoxCaptureSource:
             ) from exc
 
     def _expiry_year_fraction(self, now_epoch: float) -> float:
-        """ACT/365 year fraction from ``now_epoch`` to expiry-day 15:30 IST.
-
-        Floored at :data:`MIN_EXPIRY_YEARS` (one hour) so expiry-day captures
-        never produce a zero or negative time-to-expiry.
-        """
-        expiry_epoch = datetime.combine(self._expiry_day, NSE_CLOSE_TIME, tzinfo=IST).timestamp()
-        return max((expiry_epoch - now_epoch) / SECONDS_PER_YEAR, MIN_EXPIRY_YEARS)
+        """ACT/365 year fraction from ``now_epoch`` to expiry-day 15:30 IST."""
+        return expiry_year_fraction(self._expiry_day, now_epoch)
 
     def fetch_chain(self, underlying: str) -> RawChain:
         """Fetch the live chain and return it as an unfiltered :class:`RawChain`.
