@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_BAR_AGE_SECONDS = 900.0
 
 
+class RateLimited(Exception):
+    """The broker refused for rate reasons, not because the data is absent.
+
+    Load-bearing distinction. A contract that never traded and a contract the
+    broker declined to serve look identical at the call site, and treating the
+    second as the first silently reports a recoverable throttle as missing
+    history: six expiries once reported "0 of 20 written" with no mention of a
+    rate limit anywhere in the output.
+    """
+
+
 @dataclass(frozen=True)
 class HistoricalContract:
     """One settled option contract, as listed by the expired-contracts API."""
@@ -292,6 +303,13 @@ class BackfillConfig:
     #: Treat days that already hold a reconstruction as done, so a long run
     #: can be resumed after a rate limit without duplicating what it wrote.
     skip_existing_backfill: bool = True
+    #: First backoff after a 429, doubling each attempt.
+    rate_limit_backoff_seconds: float = 20.0
+    #: Attempts per contract before the expiry is abandoned. Abandoning is the
+    #: safe outcome: a chain assembled while the broker is refusing arbitrary
+    #: strikes is missing arbitrary strikes, and that is a worse artefact than
+    #: a gap, because it looks like a thin market rather than a throttle.
+    max_rate_limit_retries: int = 4
 
 
 @dataclass(frozen=True)
@@ -378,6 +396,32 @@ class HistoricalChainBackfill:
                 days.add(path.parent.name)
         return days
 
+    def _fetch_candles(self, instrument_key: str, first_iso: str, last_iso: str) -> pd.DataFrame:
+        """Fetch one contract's candles, backing off while the broker throttles.
+
+        A 429 says "ask again later", so asking again later is the whole fix.
+        Raises :class:`RateLimited` once the attempts are spent, which aborts
+        the expiry rather than quietly reporting the missing strikes as
+        contracts that never traded.
+        """
+        delay = self._config.rate_limit_backoff_seconds
+        for attempt in range(1, self._config.max_rate_limit_retries + 1):
+            try:
+                return self._candles_fn(instrument_key, first_iso, last_iso)
+            except RateLimited:
+                if attempt == self._config.max_rate_limit_retries:
+                    raise
+                logger.warning(
+                    "Rate limited on %s (attempt %d/%d); waiting %.0fs",
+                    instrument_key,
+                    attempt,
+                    self._config.max_rate_limit_retries,
+                    delay,
+                )
+                self._sleep(delay)
+                delay *= 2.0
+        raise RateLimited(instrument_key)  # unreachable; satisfies the type checker
+
     def run(
         self,
         expiry_date: str,
@@ -394,9 +438,14 @@ class HistoricalChainBackfill:
         first, last = min(trading_days), max(trading_days)
         for index, contract in enumerate(contracts):
             try:
-                candles[contract.instrument_key] = self._candles_fn(
+                candles[contract.instrument_key] = self._fetch_candles(
                     contract.instrument_key, first.isoformat(), last.isoformat()
                 )
+            except RateLimited:
+                # Deliberately not swallowed. Continuing would build chains
+                # from whichever strikes happened to get through, which reads
+                # downstream as a thin market rather than as a throttle.
+                raise
             except Exception:
                 # One dead contract must not abandon the expiry; it becomes a
                 # never-traded skip and shows up in the coverage number.
@@ -549,6 +598,7 @@ __all__ = [
     "BackfillDayResult",
     "HistoricalChainBackfill",
     "HistoricalContract",
+    "RateLimited",
     "ReconstructionReport",
     "candles_to_epoch_frame",
     "contracts_from_frame",

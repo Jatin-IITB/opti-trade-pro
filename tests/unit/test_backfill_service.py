@@ -20,6 +20,7 @@ from options_trading.services.backfill_service import (
     BackfillConfig,
     HistoricalChainBackfill,
     HistoricalContract,
+    RateLimited,
     candles_to_epoch_frame,
     contracts_from_frame,
     implied_forward_from_parity,
@@ -525,3 +526,86 @@ class TestTimeToExpiry:
 
         assert chain.quotes[0].expiry == pytest.approx(expiry_year_fraction(EXPIRY_DAY, at))
         assert chain.quotes[0].expiry > 0.0
+
+
+class TestRateLimitIsNotMistakenForMissingData:
+    """A 429 and an untraded strike look identical at the call site.
+
+    Conflating them once reported six throttled expiries as "0 of 20 written"
+    with the words "rate limit" appearing nowhere in the output — a
+    recoverable throttle presented as missing history.
+    """
+
+    ZONE = IST
+    DAYS: ClassVar[list[date]] = [date(2026, 9, 4)]
+
+    def _backfill(self, tmp_path, candles_fn, config=None):
+        self.slept: list[float] = []
+        return HistoricalChainBackfill(
+            SnapshotStore(tmp_path),
+            config or BackfillConfig(snapshot_times=("15:25",)),
+            contracts_fn=lambda _k, _e: PAIRED_CONTRACTS,
+            candles_fn=candles_fn,
+            spot_fn=lambda _at: 24000.0,
+            sleep_fn=self.slept.append,
+        )
+
+    def test_a_transient_throttle_is_retried_and_succeeds(self, tmp_path) -> None:
+        """A 429 means ask again later, so asking again later is the fix."""
+        good = paired_candles(epoch(15, 20))
+        state = {"calls": 0}
+
+        def candles_fn(key, first, last):
+            state["calls"] += 1
+            if state["calls"] <= 2:  # first two calls throttled
+                raise RateLimited(key)
+            return good[key]
+
+        results = self._backfill(tmp_path, candles_fn).run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert [r.written for r in results] == [True]
+        assert any(s >= 20.0 for s in self.slept), "must actually back off, not spin"
+
+    def test_backoff_doubles(self, tmp_path) -> None:
+        def candles_fn(key, first, last):
+            raise RateLimited(key)
+
+        config = BackfillConfig(snapshot_times=("15:25",), max_rate_limit_retries=4)
+        with pytest.raises(RateLimited):
+            self._backfill(tmp_path, candles_fn, config).run("2026-09-08", self.DAYS, self.ZONE)
+
+        backoffs = [s for s in self.slept if s >= 20.0]
+        assert backoffs == [20.0, 40.0, 80.0]
+
+    def test_a_sustained_throttle_aborts_rather_than_writing_a_partial_chain(
+        self, tmp_path
+    ) -> None:
+        """The dangerous outcome is a chain built from whichever strikes got
+        through: downstream that reads as a thin market, not as a throttle."""
+        good = paired_candles(epoch(15, 20))
+        allowed = set(list(good)[:4])
+
+        def candles_fn(key, first, last):
+            if key in allowed:
+                return good[key]
+            raise RateLimited(key)
+
+        with pytest.raises(RateLimited):
+            self._backfill(tmp_path, candles_fn).run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert SnapshotStore(tmp_path).list_snapshots("NIFTY") == [], "nothing partial on disk"
+
+    def test_a_genuinely_untraded_contract_is_still_just_skipped(self, tmp_path) -> None:
+        """The distinction must cut both ways: a real absence is not a throttle."""
+        good = paired_candles(epoch(15, 20))
+        missing = PAIRED_CONTRACTS[0].instrument_key
+
+        def candles_fn(key, first, last):
+            if key == missing:
+                raise ValueError("no candles")
+            return good[key]
+
+        results = self._backfill(tmp_path, candles_fn).run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert [r.written for r in results] == [True]
+        assert not self.slept or all(s < 20.0 for s in self.slept), "no backoff for an absence"

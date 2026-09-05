@@ -40,6 +40,7 @@ from options_trading.config.settings import settings
 from options_trading.services.backfill_service import (
     BackfillConfig,
     HistoricalChainBackfill,
+    RateLimited,
     candles_to_epoch_frame,
     contracts_from_frame,
     spot_lookup_from_candles,
@@ -133,6 +134,11 @@ def main() -> int:
             f"{settings.upstox_option_candles_url}/{instrument_key}/1minute/{last_iso}/{first_iso}"
         )
         response = session.get(url, headers=headers, timeout=30)
+        # 429 means "ask again later", which is nothing like "this contract
+        # never traded". Conflating them once reported six throttled expiries
+        # as missing history, with the words "rate limit" appearing nowhere.
+        if response.status_code == 429:
+            raise RateLimited(instrument_key)
         response.raise_for_status()
         rows = response.json().get("data", {}).get("candles", [])
         if not rows:
@@ -193,6 +199,17 @@ def main() -> int:
         )
         try:
             results = backfill.run(expiry_str, days, IST)
+        except RateLimited:
+            # The service already backed off and exhausted its attempts, so
+            # the throttle is sustained rather than a burst. Stopping is the
+            # honest response: every further expiry would 429 too, and the run
+            # is resumable, so a later invocation picks up exactly here.
+            print(
+                f"  [{index}/{len(expiries)}] {expiry_str}: RATE LIMITED after "
+                f"{config.max_rate_limit_retries} attempts. Stopping — the store keeps "
+                f"{stored_days()} days and a re-run resumes from here."
+            )
+            break
         except Exception as exc:
             print(f"  [{index}/{len(expiries)}] {expiry_str} FAILED: {type(exc).__name__}: {exc}")
             continue
