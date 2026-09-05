@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,21 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     upstox_api_key: str = Field(..., description="Upstox API key")
     upstox_secret_key: str = Field(..., description="Upstox secret key")
+
+    upstox_analytics_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Upstox Analytics Token: read-only, GET-only, valid one year, generated "
+            "once from the Developer Apps console with no OAuth redirect. When set, "
+            "the capture path uses it instead of the daily access token, which "
+            "expires at 03:30 IST and otherwise needs an interactive login every "
+            "morning. Its read-only restriction matches this app's own rule that no "
+            "order-placement path exists, so it removes a daily chore without "
+            "widening what the app can do. SecretStr rather than str because unlike "
+            "the daily token this one is good for a year: a single stray log line "
+            "would be a year-long exposure."
+        ),
+    )
 
     upstox_base_url: str = Field(default="https://api.upstox.com")
     upstox_expired_expiries_url: str = Field(

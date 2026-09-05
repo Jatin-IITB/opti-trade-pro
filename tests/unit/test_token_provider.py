@@ -276,3 +276,116 @@ class TestInvalidateFailsClosed:
         provider.invalidate()
         with pytest.raises(AuthError):
             provider.cached()
+
+
+class TestAnalyticsToken:
+    """The Analytics Token: read-only, GET-only, valid one year.
+
+    The daily access token expires at 03:30 IST, so unattended capture needed
+    an interactive login every morning and one forgotten morning cost a whole
+    trading day of history. The Analytics Token removes that, and its
+    read-only restriction happens to match this app's own rule that no
+    order-placement path exists — so it is strictly less privilege, not more.
+    """
+
+    @pytest.fixture()
+    def configured(self, monkeypatch):
+        from pydantic import SecretStr
+
+        from options_trading.services import token_provider as module
+
+        monkeypatch.setattr(
+            module.settings, "upstox_analytics_token", SecretStr("analytics-abc"), raising=False
+        )
+        return "analytics-abc"
+
+    @pytest.mark.asyncio
+    async def test_it_is_used_without_touching_auth_service(self, configured):
+        """No OAuth round trip, so no login can be needed."""
+        factory, calls = _auth_factory(["oauth-token"], _token_info(86_400))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+
+        assert await provider.get() == configured
+        assert calls["resolve"] == 0, "the OAuth path must not be consulted"
+
+    @pytest.mark.asyncio
+    async def test_no_reauth_is_ever_requested(self, configured):
+        """Prompting for a login that cannot help is worse than silence."""
+        factory, _ = _auth_factory(error=AuthError("expired"))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+        await provider.get()
+
+        assert provider.needs_reauth is False
+
+    @pytest.mark.asyncio
+    async def test_rejection_falls_back_instead_of_looping(self, configured):
+        """Re-resolving a constant returns the same constant.
+
+        Without the rejected flag, invalidate/get would hand back the same
+        dead token on every retry forever — a fail-closed check that loops
+        instead of failing.
+        """
+        factory, calls = _auth_factory(["oauth-token"], _token_info(86_400))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+        assert await provider.get() == configured
+
+        provider.invalidate()
+
+        assert await provider.get() == "oauth-token"
+        assert calls["resolve"] == 1
+        assert provider.needs_reauth is False  # a fresh OAuth token resolved fine
+
+    @pytest.mark.asyncio
+    async def test_after_rejection_reauth_reporting_returns(self, configured):
+        """Once the static token is gone, OAuth really is what is left."""
+        factory, _ = _auth_factory(error=AuthError("login required"))
+        clock = FakeClock()
+        provider = TokenProvider(auth_service_factory=factory, now_fn=clock)
+        await provider.get()
+        provider.invalidate()
+
+        with pytest.raises(AuthError):
+            await provider.get()
+        assert provider.needs_reauth is True
+
+    @pytest.mark.asyncio
+    async def test_absent_token_leaves_the_oauth_path_untouched(self, monkeypatch):
+        from options_trading.services import token_provider as module
+
+        monkeypatch.setattr(module.settings, "upstox_analytics_token", None, raising=False)
+        factory, calls = _auth_factory(["oauth-token"], _token_info(86_400))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+
+        assert await provider.get() == "oauth-token"
+        assert calls["resolve"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_blank_token_counts_as_absent(self, monkeypatch):
+        """An empty env var must not become an empty bearer header."""
+        from pydantic import SecretStr
+
+        from options_trading.services import token_provider as module
+
+        monkeypatch.setattr(
+            module.settings, "upstox_analytics_token", SecretStr("   "), raising=False
+        )
+        factory, calls = _auth_factory(["oauth-token"], _token_info(86_400))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+
+        assert await provider.get() == "oauth-token"
+        assert calls["resolve"] == 1
+
+    @pytest.mark.asyncio
+    async def test_the_secret_never_reaches_the_logs(self, configured, caplog):
+        """A year-long credential must not survive in a log file.
+
+        CLAUDE.md: never echo secret values, presence and length only.
+        """
+        factory, _ = _auth_factory(["oauth-token"], _token_info(86_400))
+        provider = TokenProvider(auth_service_factory=factory, now_fn=FakeClock())
+
+        with caplog.at_level("DEBUG"):
+            await provider.get()
+            provider.invalidate()
+
+        assert configured not in caplog.text

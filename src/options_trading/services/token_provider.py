@@ -4,6 +4,14 @@ Upstox access tokens expire daily (around 03:30 IST). Standard app types are
 not issued a refresh token, so expiry means the user must re-authenticate
 through the OAuth flow — it cannot be recovered from automatically.
 
+Unless an Analytics Token is configured. That one is generated once from the
+Developer Apps console, is valid for a year, and needs no redirect, so a
+capture schedule spanning many days never stops for a login. It is read-only
+and GET-only, which is the same restriction this app already imposes on
+itself, so preferring it narrows privilege rather than widening it. When set
+it wins; if the broker ever rejects it, resolution falls back to the OAuth
+path rather than re-offering a token already known to be dead.
+
 The failure mode this module exists to prevent: background services used to
 capture the token *string* at construction and hold it for their lifetime, so
 the moment it expired they logged an identical failure every cycle, forever,
@@ -23,6 +31,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..config.settings import settings
 from ..models.auth import TokenInfo
 from ..utils.exceptions import AuthError
 from .auth_service import AuthService
@@ -69,6 +78,24 @@ class TokenProvider:
         self._auth_failed_until: float = 0.0
         self._last_auth_error: str | None = None
         self._lock = asyncio.Lock()
+        #: Set once the broker rejects the configured analytics token. Without
+        #: it, ``invalidate`` then ``get`` would hand back the same dead static
+        #: token forever, since re-resolving a constant re-reads the constant.
+        self._analytics_rejected = False
+
+    @staticmethod
+    def _analytics_token() -> str | None:
+        """The configured Analytics Token, or None.
+
+        Read per call rather than captured at construction so a token added to
+        the environment is picked up on the next resolution instead of needing
+        a restart.
+        """
+        secret = getattr(settings, "upstox_analytics_token", None)
+        if secret is None:
+            return None
+        value = secret.get_secret_value().strip()
+        return value or None
 
     @property
     def needs_reauth(self) -> bool:
@@ -76,7 +103,14 @@ class TokenProvider:
 
         Callers surface this to the user: only an interactive Upstox login can
         clear it.
+
+        A usable Analytics Token means no login can be required, so this stays
+        False — prompting for one would be advice that cannot help. Once that
+        token has been rejected the flag behaves normally again, because the
+        OAuth path really is what is left.
         """
+        if self._analytics_token() is not None and not self._analytics_rejected:
+            return False
         return self._last_auth_error is not None and self._now_fn() < self._auth_failed_until
 
     @property
@@ -101,7 +135,20 @@ class TokenProvider:
         us this token is dead. The token itself is cleared, not just its
         deadline, so :meth:`cached` raises instead of handing a known-dead
         token to the synchronous capture path (ADR-008, fail closed).
+
+        If the rejected token was the Analytics Token, it is also marked
+        rejected so the next resolution falls through to the OAuth path.
+        Re-resolving a constant would otherwise return the same dead token on
+        every retry, forever — a fail-closed check that loops instead of
+        failing.
         """
+        if self._token is not None and self._token == self._analytics_token():
+            self._analytics_rejected = True
+            logger.warning(
+                "The Upstox Analytics Token was rejected. Falling back to the daily "
+                "OAuth token; generate a new Analytics Token in the Developer Apps "
+                "console to restore unattended capture."
+            )
         self._token = None
         self._good_until = 0.0
 
@@ -127,6 +174,22 @@ class TokenProvider:
             return await self._resolve()
 
     async def _resolve(self) -> str:
+        analytics = self._analytics_token()
+        if analytics is not None and not self._analytics_rejected:
+            # No I/O: the Analytics Token is a constant, valid a year, and
+            # carries no expiry metadata to consult. It is still cached for the
+            # normal window so a rejection is noticed within one cycle rather
+            # than being masked until restart.
+            self._token = analytics
+            self._last_auth_error = None
+            self._auth_failed_until = 0.0
+            self._good_until = self._now_fn() + self._config.max_cache_seconds
+            logger.info(
+                "Using the Upstox Analytics Token (read-only, no daily login); cached for %.0fs",
+                self._config.max_cache_seconds,
+            )
+            return analytics
+
         try:
             async with self._auth_service_factory() as auth:
                 token = await auth.get_valid_access_token(self._user_id)
