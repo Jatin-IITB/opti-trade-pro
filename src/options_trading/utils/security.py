@@ -28,20 +28,22 @@ class SecureStorage:
         self._encryption_key = None
 
     def _get_encryption_key(self) -> bytes:
-        """Get or create encryption key for secure storage."""
+        """Get or create a 32-byte encryption key for Fernet.
+
+        All paths return raw 32 bytes; callers base64-encode for Fernet.
+        """
         if self._encryption_key:
             return self._encryption_key
 
         try:
-            # Try to get existing key from keyring
             key_str = keyring.get_password(self.settings.token_keyring_service, "encryption_key")
 
             if key_str:
                 self._encryption_key = base64.urlsafe_b64decode(key_str.encode())
             else:
-                # Generate new key
-                self._encryption_key = Fernet.generate_key()
-                # Store in keyring
+                import os
+
+                self._encryption_key = os.urandom(32)
                 keyring.set_password(
                     self.settings.token_keyring_service,
                     "encryption_key",

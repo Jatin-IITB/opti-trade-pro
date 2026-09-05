@@ -6,9 +6,11 @@ Fixed user ID handling and token storage issues.
 """
 
 import logging
+import ssl
 import uuid
 
 import httpx
+import truststore
 
 from ..config.settings import get_settings
 from ..models.auth import (
@@ -26,6 +28,12 @@ from ..utils.security import SecureStorage
 logger = logging.getLogger(__name__)
 
 
+def _system_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context that trusts the OS certificate store (handles corporate proxies)."""
+    ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    return ctx
+
+
 class AuthService:
     """
     FIXED: Modern authentication service with proper user ID handling.
@@ -41,10 +49,25 @@ class AuthService:
         )
         self._http_client: httpx.AsyncClient | None = None
 
+    async def load_connector_credentials(self) -> None:
+        """Override OAuth config from connector store if configured via UI."""
+        from .connector_store import ConnectorStore
+
+        store = ConnectorStore()
+        config = await store.get_config("upstox")
+        if config and config.get("api_key") and config.get("api_secret"):
+            self.oauth_config = OAuthConfig(
+                client_id=config["api_key"],
+                client_secret=config["api_secret"],
+                redirect_uri=config.get("redirect_uri", self.settings.oauth_redirect_uri),
+            )
+            logger.info("OAuth config loaded from connector store (UI-configured)")
+
     async def __aenter__(self):
         """Async context manager entry."""
         self._http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
+            verify=_system_ssl_context(),
             headers={
                 "Accept": "application/json",
                 "Api-Version": "2.0",

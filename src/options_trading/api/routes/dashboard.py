@@ -3,13 +3,19 @@
 Production-grade dashboard routes for options trading platform.
 """
 
-import dataclasses
 import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
 from ...models.dashboard import (
@@ -17,7 +23,6 @@ from ...models.dashboard import (
     MarketDataStatus,
     PositionSummary,
     RiskMetrics,
-    StrategyPerformance,
     SystemStatus,
 )
 from ...services.dashboard_service import DashboardService
@@ -29,7 +34,21 @@ from ..dependencies import get_dashboard_service, get_market_data_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-websocket_manager = WebSocketManager()
+
+def _ws_manager(app: Any) -> WebSocketManager:
+    """Resolve the application-wide WebSocketManager.
+
+    There must be exactly one instance per app: browser clients register on
+    it here, and ``LivePipelineService`` / ``PortfolioSyncService`` broadcast
+    on it. A second instance would accept connections that no broadcaster can
+    ever reach, so this reads from ``app.state`` rather than constructing one.
+    """
+    manager = getattr(app.state, "websocket_manager", None)
+    if manager is None:
+        manager = WebSocketManager()
+        app.state.websocket_manager = manager
+        logger.warning("websocket_manager missing from app.state; created one lazily")
+    return manager
 
 
 @router.get("/status", response_model=SystemStatus)
@@ -60,26 +79,6 @@ async def get_market_data_status(
         logger.error(f"Failed to get market data status: {e}")
         raise HTTPException(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Market data status unavailable"
-        )
-
-
-@router.get("/strategies/performance", response_model=list[StrategyPerformance])
-async def get_strategy_performance(
-    limit: int = 10,
-    active_only: bool = True,
-    current_user: dict = Depends(get_current_user),
-    dashboard_service: DashboardService = Depends(get_dashboard_service),
-) -> list[StrategyPerformance]:
-    try:
-        strategies = await dashboard_service.get_strategy_performance(
-            limit=limit, active_only=active_only
-        )
-        return strategies
-    except Exception as e:
-        logger.error(f"Failed to get strategy performance: {e}")
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Strategy performance data unavailable",
         )
 
 
@@ -121,8 +120,8 @@ async def get_risk_metrics(
 async def websocket_endpoint(
     websocket: WebSocket,
     client_id: str,
-    market_service: MarketDataService = Depends(get_market_data_service),
 ):
+    websocket_manager = _ws_manager(websocket.app)
     await websocket_manager.connect(websocket, client_id)
     try:
         while True:
@@ -155,7 +154,9 @@ async def websocket_endpoint(
                         await websocket.send_json(
                             {
                                 "type": "dashboard_update",
-                                "data": dataclasses.asdict(snapshot),
+                                # Same builder as the push path, so a reconnecting
+                                # client cannot receive a payload missing panels.
+                                "data": await pipeline.build_wire_dict(snapshot),
                                 "timestamp": datetime.now().isoformat(),
                             }
                         )
@@ -211,17 +212,21 @@ async def get_live_snapshot(request: Request) -> Any:
         raise HTTPException(status_code=503, detail="Live pipeline not initialized")
     snapshot = pipeline.get_latest_snapshot()
     if snapshot is None:
-        return JSONResponse(status_code=204, content=None)
-    return dataclasses.asdict(snapshot)
+        # 204 carries no body, so the server derives Content-Length: 0 from the
+        # status. A JSONResponse here still writes b"null", which uvicorn
+        # rejects against that length — the connection breaks mid-response and
+        # the caller sees a truncated 204 instead of "no capture yet".
+        return Response(status_code=204)
+    return await pipeline.build_wire_dict(snapshot)
 
 
 @router.get("/health")
-async def dashboard_health_check() -> dict[str, Any]:
+async def dashboard_health_check(request: Request) -> dict[str, Any]:
     try:
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "active_connections": websocket_manager.connection_count(),
+            "active_connections": _ws_manager(request.app).connection_count(),
             "version": "2.0.0",
         }
     except Exception as e:

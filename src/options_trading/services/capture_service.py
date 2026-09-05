@@ -43,6 +43,23 @@ MIN_EXPIRY_YEARS = 1.0 / 365.0 / 24.0
 # Used only if the settings object lacks a risk_free_rate field.
 FALLBACK_RISK_FREE_RATE = 0.065
 
+
+def expiry_year_fraction(expiry_day: date, now_epoch: float) -> float:
+    """ACT/365 year fraction from ``now_epoch`` to ``expiry_day`` 15:30 IST.
+
+    Floored at :data:`MIN_EXPIRY_YEARS` (one hour) so expiry-day snapshots
+    never produce a zero or negative time-to-expiry, which would break every
+    vol solver downstream.
+
+    Module-level so the live capture path and the historical backfill share
+    one definition. Two copies of a day-count convention is two chances to
+    disagree, and a surface fitted on one and replayed against the other would
+    show the difference as a vol move nobody made.
+    """
+    expiry_epoch = datetime.combine(expiry_day, NSE_CLOSE_TIME, tzinfo=IST).timestamp()
+    return max((expiry_epoch - now_epoch) / SECONDS_PER_YEAR, MIN_EXPIRY_YEARS)
+
+
 # Authoritative Upstox chain-row field aliases (mirrors MarketDataService's mapping).
 _STRIKE_KEYS = ("strike_price", "strike", "strikePrice")
 _CALL_KEYS = ("call_options", "call_option", "CE", "call")
@@ -149,13 +166,22 @@ class UpstoxCaptureSource:
 
     def __init__(
         self,
-        access_token: str,
-        instrument_key: str,
-        expiry_date: str,
+        access_token: str | None = None,
+        instrument_key: str = "",
+        expiry_date: str = "",
         rate: float | None = None,
         now_fn: Callable[[], float] = time.time,
+        token_fn: Callable[[], str] | None = None,
     ) -> None:
-        self._access_token = access_token
+        """``token_fn`` is read per fetch; ``access_token`` pins one string.
+
+        ``fetch_chain`` runs in a worker thread, so the token source must be
+        synchronous. Pass ``TokenProvider.cached`` here and refresh the
+        provider on the event loop before each capture.
+        """
+        if token_fn is None and access_token is None:
+            raise ValueError("Either token_fn or access_token must be provided")
+        self._token_fn = token_fn if token_fn is not None else (lambda: access_token or "")
         self._instrument_key = instrument_key
         self._expiry_date = expiry_date
         self._expiry_day = self._parse_expiry_date(expiry_date)
@@ -174,13 +200,8 @@ class UpstoxCaptureSource:
             ) from exc
 
     def _expiry_year_fraction(self, now_epoch: float) -> float:
-        """ACT/365 year fraction from ``now_epoch`` to expiry-day 15:30 IST.
-
-        Floored at :data:`MIN_EXPIRY_YEARS` (one hour) so expiry-day captures
-        never produce a zero or negative time-to-expiry.
-        """
-        expiry_epoch = datetime.combine(self._expiry_day, NSE_CLOSE_TIME, tzinfo=IST).timestamp()
-        return max((expiry_epoch - now_epoch) / SECONDS_PER_YEAR, MIN_EXPIRY_YEARS)
+        """ACT/365 year fraction from ``now_epoch`` to expiry-day 15:30 IST."""
+        return expiry_year_fraction(self._expiry_day, now_epoch)
 
     def fetch_chain(self, underlying: str) -> RawChain:
         """Fetch the live chain and return it as an unfiltered :class:`RawChain`.
@@ -189,7 +210,7 @@ class UpstoxCaptureSource:
         are ordered by (strike ascending, call before put) so repeated captures
         of the same book serialize identically.
         """
-        data = fetch_live_option_chain(self._instrument_key, self._expiry_date, self._access_token)
+        data = fetch_live_option_chain(self._instrument_key, self._expiry_date, self._token_fn())
         rows = _extract_rows(data)
         now = self._now_fn()
         expiry = self._expiry_year_fraction(now)
@@ -225,8 +246,15 @@ def capture_and_store(
     store: SnapshotStore,
     underlying: str,
     config: FilterConfig | None = None,
+    chain: RawChain | None = None,
 ) -> CaptureReport:
-    """Fetch a chain, filter it, persist only the clean quotes, and report.
+    """Filter a chain, persist only the clean quotes, and report.
+
+    Pass ``chain`` when the caller has already fetched one, so a single
+    broker round-trip serves both the stored snapshot and downstream
+    analytics. Fetching twice would double the outbound call rate *and* leave
+    the persisted history describing a different instant from the broadcast
+    dashboard.
 
     Policy: the snapshot store is the *clean* history. Rejected quotes are
     dropped (their counts survive in ``rejection_stats``) because the raw
@@ -235,7 +263,8 @@ def capture_and_store(
     stored snapshot needs no re-filtering. Chain metadata (underlying, spot,
     rate, timestamp, dividend yield) is preserved verbatim.
     """
-    chain = source.fetch_chain(underlying)
+    if chain is None:
+        chain = source.fetch_chain(underlying)
     result = filter_chain(chain, config if config is not None else DEFAULT_FILTER_CONFIG)
     clean_chain = replace(chain, quotes=result.clean)
     path = store.write(clean_chain)

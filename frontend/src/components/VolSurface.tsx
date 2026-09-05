@@ -18,8 +18,8 @@ export function VolSurface({ data }: Props) {
             Implied Volatility Surface
           </h2>
           <p className="text-sm text-slate-400">
-            Strike &times; Expiry &times; IV &mdash; synthetic NIFTY smiles with
-            skew and term structure
+            Strike &times; Expiry &times; IV &mdash; fitted from the captured
+            option chain
           </p>
         </div>
         <div className="text-right text-xs text-slate-400">

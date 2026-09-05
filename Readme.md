@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jatin-IITB/opti-trade-pro/actions/workflows/ci.yml)
 ![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![Tests 598](https://img.shields.io/badge/tests-598%20passed-brightgreen)
+![Tests 1188](https://img.shields.io/badge/tests-1188%20passed-brightgreen)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 **A production-grade autonomous volatility desk** — from option pricing through
 risk-controlled paper trading to an LLM-augmented research loop — built as two
-strictly layered packages with 23 architecture decision records, a fail-closed
-risk engine, and 571 deterministic tests enforcing every quantitative claim.
+strictly layered packages with 28 architecture decision records, a fail-closed
+risk engine, and 1188 deterministic tests enforcing every quantitative claim.
 
 > Every number in this README names the test that checks it (CLAUDE.md rule 8).
 
@@ -90,12 +90,20 @@ Built on the [autonomous-volatility-desk roadmap](docs/roadmap.md):
 | Walk-forward | `optitrade.backtest` | Combinatorial purged cross-validation, deflated Sharpe, synthetic + real-history replay | `test_walk_forward.py`, `test_dsr.py` |
 | Paper desk | `optitrade.desk` | Daily cycle: mark → strategy → debate → risk → fill → hedge → journal; kill switch on drawdown halt | `test_daily_cycle.py`, `test_kill_switch.py` |
 | Live capture | `options_trading` | Upstox chains → quote filters → Parquet; unattended scheduler inside IST window | `test_capture_service.py`, `test_capture_scheduler.py` |
+| Desk platform | `options_trading` | Drives the core cycle over captured history: one cycle per stored day, idempotent by recorded date, book persisted across restarts, journal decision trail, file-based kill switch. **Paper fills only — the app has no order-placement path** | `test_desk_service.py`, `test_desk_routes.py`, `test_desk_state_store.py` |
 | Drift metric | `optitrade.desk` | Backtest-vs-desk reconciliation on identical days — measures the execution-model gap in bps | `test_reconcile.py` |
 | Daily report | `optitrade.desk` | Markdown artifact: desk summary + analyst sections, each groundedness-scored | `test_daily_report.py` |
 | LLM analysts | `optitrade.agents` | Hybrid: deterministic claims + LLM narrative; orchestrator runs both tiers, fail-open capture | `test_llm_analyst.py`, `test_orchestrator.py` |
 | Research loop | `optitrade.research` | GridSearch + LLM agents propose → walk-forward evaluates → rank → journal; human approval gate | `test_research_loop.py`, `test_research_evaluator.py` |
-| MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py` |
+| MCP server | `optitrade.mcp_server` | 6 journaling tools: `price_option`, `book_greeks`, `run_scenarios`, `review_order`, `journal_tail`, `run_experiment` | `test_mcp_server.py`, `test_mcp_schemas.py` |
 | Groundedness | `optitrade.audit` | Deterministic auditor: claim numbers must match journal citations | `test_groundedness.py` |
+| Analyst panel | `options_trading` | Surfaces the deterministic analysts over the desk journal, rendering the auditor's verdict and cited sequence numbers beside every claim. Partial coverage is reported: an analyst whose event type is absent is listed with what it needed, and the query-driven risk officer is named as deliberately off the roster | `test_analyst_service.py`, `test_analyst_routes.py` |
+
+This table is a module inventory, not a claim about what the web app surfaces.
+`optitrade.research` and `optitrade.attribution` still have **no
+`options_trading` imports** — they are reachable from the CLI, the MCP server
+and tests, but no dashboard panel renders them.
+[docs/roadmap.md](docs/roadmap.md) tracks reach per phase.
 
 ## Quick start
 
@@ -106,16 +114,36 @@ optitrade demo         # end-to-end: chain → surface → Greeks → debate →
 optitrade cycle        # paper desk: strategy → debate → risk → fills → hedge → kill switch
 optitrade research     # research loop: grid-search → walk-forward → ranked proposals
 
-pytest -q              # 571 tests, deterministic (seeded RNGs, no network)
+pytest -q              # 1188 tests, deterministic (seeded RNGs, no network)
 pytest -q -m benchmark # latency targets (run locally)
 ```
 
-Run the platform (needs Upstox credentials in `.env`, see `.env.example`):
+Run the platform (needs Upstox credentials in `.env`, see `.env.example`). The
+React app is served from the same origin, so this one command is the whole
+product:
 
 ```bash
+cd frontend && npm run build && cd ..
 uvicorn options_trading.main:app --reload --port 8000
-# docs at http://localhost:8000/docs — quant endpoints under /api/v1/analytics/*
+# app at http://localhost:8000 — API docs at /docs, quant endpoints under /api/v1/analytics/*
 ```
+
+## MCP server
+
+The engines are also reachable as agent tools over MCP stdio. Agents observe,
+explain and propose — no tool mutates a book or routes an order, and every call
+appends a `tool_call` journal event that `optitrade.audit` uses as the citation
+target for agent claims (ADR-015).
+
+```bash
+uv pip install -e ".[mcp]"     # optional extra; the server needs it
+optitrade-mcp --journal-dir runtime_data
+```
+
+Point any MCP client at that command. Tool arguments are declared as
+`TypedDict`s so the generated JSON schema names every field — `test_mcp_schemas.py`
+fails the build if a tool ever exposes a property-less `object` parameter, which
+is unusable by a calling agent.
 
 ## Analytics API
 

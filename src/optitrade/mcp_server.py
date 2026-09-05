@@ -1,7 +1,7 @@
 """MCP stdio server exposing the OptiTrade quant core as agent tools.
 
 Thin adapter only: map JSON-friendly tool arguments into ``optitrade`` engine
-calls and engine results back to JSON — no math lives here. Two properties
+calls and engine results back to JSON — no math lives here. Three properties
 are load-bearing:
 
 - Every tool call appends an ``event_type="tool_call"`` journal event carrying
@@ -10,6 +10,9 @@ are load-bearing:
   as it cites journaled engine output (the Prism toolshed/auditor pattern).
 - Agents observe, explain and propose — they never execute. No tool here
   mutates a book or routes an order; ``review_order`` returns a verdict.
+- Every argument is declared, so the generated JSON schema names its fields.
+  A tool an agent cannot call correctly is not a tool; see the ``*Spec``
+  TypedDicts below and ``tests/unit/quant/test_mcp_schemas.py``.
 
 The ``mcp`` dependency is an optional extra, so this module must import
 cleanly without it; the import happens inside :func:`create_server`.
@@ -22,7 +25,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
 from optitrade.backtest.market_replay import SyntheticVRPMarket
 from optitrade.backtest.walk_forward import BacktestConfig, run_walk_forward
@@ -42,6 +45,106 @@ _MCP_INSTALL_HINT = (
     "the OptiTrade MCP server needs the optional 'mcp' package; "
     'install it with: pip install "optitrade-pro[mcp]"'
 )
+
+
+# --- Tool argument schemas ---------------------------------------------------
+#
+# These exist so the generated JSON schema names its fields. A bare
+# ``dict[str, Any]`` parameter serialises to ``{"type": "object"}`` with no
+# properties, which tells a calling agent nothing: it has to guess field names,
+# guesses wrong, and gets back an opaque "Error executing tool" because the MCP
+# layer swallows the underlying TypeError. The tool guarding the money path was
+# the one an agent could not call.
+#
+# ``TypedDict`` keeps the quant core dependency-free (stdlib ``typing``) while
+# pydantic — which the MCP server already uses to build schemas — expands it
+# into named, typed, required-marked properties. Bodies still receive plain
+# dicts, so the engine calls below are unchanged.
+#
+# These mirror the engine dataclasses, so ``test_mcp_schemas.py`` asserts the
+# keys match field-for-field; a new limit or config field fails that test
+# rather than silently going missing from the agent-facing schema.
+
+
+class PositionSpec(TypedDict):
+    """One option leg. ``expiry`` is in years (ACT/365), ``vol`` annualised decimal."""
+
+    strike: float
+    expiry: float
+    option_type: Literal["call", "put"]
+    quantity: float
+    vol: float
+
+
+class OrderSpec(TypedDict):
+    """A proposed order. ``quantity`` is signed: negative sells."""
+
+    symbol: str
+    quantity: float
+    price: float
+
+
+class GreeksSpec(TypedDict, total=False):
+    """Greeks in per-unit conventions. Omitted members default to 0.0."""
+
+    delta: float
+    gamma: float
+    vega: float
+    theta: float
+    rho: float
+    vanna: float
+    volga: float
+
+
+class LimitsSpec(TypedDict):
+    """Risk caps. Greek caps are absolute values and must be positive.
+
+    ``max_drawdown`` and ``max_concentration`` are fractions in (0, 1].
+    ``margin_buffer`` is a multiplier >= 1.0 (1.25 keeps 25% spare margin).
+    """
+
+    max_abs_delta: float
+    max_abs_gamma: float
+    max_abs_vega: float
+    max_drawdown: float
+    max_concentration: float
+    margin_buffer: NotRequired[float]
+
+
+class RiskContextSpec(TypedDict, total=False):
+    """Account and book state the pre-trade checks price against.
+
+    Every member is optional and defaults to 0.0 / empty Greeks, so a partial
+    context yields a conservative (fail-closed) review rather than an error.
+    """
+
+    equity: float
+    high_water_mark: float
+    margin_available: float
+    portfolio_greeks: GreeksSpec
+    order_greeks: GreeksSpec
+    margin_required: float
+    spot: float
+
+
+class VRPConfigSpec(TypedDict, total=False):
+    """Partial override of :class:`~optitrade.strategy.vrp.VRPConfig`.
+
+    Every member is optional; omitted ones keep the strategy default. Vol
+    figures are annualised decimals (0.03 = 3 vol points), tenors in calendar
+    days. ``max_term_slope`` / ``min_skew`` / ``max_days_in_trade`` accept null
+    to disable that filter.
+    """
+
+    entry_vrp_min: float
+    exit_vrp_max: float
+    tenor_days: int
+    structure: Literal["straddle", "strangle"]
+    strangle_delta: float
+    quantity: float
+    max_term_slope: float | None
+    min_skew: float | None
+    max_days_in_trade: int | None
 
 
 def _greeks_dict(greeks: Greeks) -> dict[str, float]:
@@ -66,7 +169,7 @@ def _event_dict(event: Event) -> dict[str, Any]:
     }
 
 
-def _book(positions: list[dict[str, Any]]) -> list[BookPosition]:
+def _book(positions: list[PositionSpec]) -> list[BookPosition]:
     return [
         BookPosition(
             strike=float(p["strike"]),
@@ -126,7 +229,7 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         return result
 
     def book_greeks(
-        positions: list[dict[str, Any]],
+        positions: list[PositionSpec],
         spot: float,
         rate: float,
         dividend_yield: float = 0.0,
@@ -151,7 +254,7 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         return result
 
     def run_scenarios(
-        positions: list[dict[str, Any]],
+        positions: list[PositionSpec],
         spot: float,
         rate: float,
         n_spot: int = 11,
@@ -194,12 +297,25 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         return result
 
     def review_order(
-        order: dict[str, Any],
-        limits: dict[str, Any],
-        context: dict[str, Any],
+        order: OrderSpec,
+        limits: LimitsSpec,
+        context: RiskContextSpec,
     ) -> dict[str, Any]:
         """Fail-closed pre-trade risk review: a verdict and reasons, never an execution."""
-        risk_limits = RiskLimits(**{k: float(v) for k, v in limits.items()})
+        # Read the caps by name rather than splatting: this is the money path,
+        # so which keys are consumed should be readable here. ``margin_buffer``
+        # is omitted when absent so the engine default applies rather than a
+        # second copy of it living in this adapter.
+        limit_kwargs: dict[str, float] = {
+            "max_abs_delta": float(limits["max_abs_delta"]),
+            "max_abs_gamma": float(limits["max_abs_gamma"]),
+            "max_abs_vega": float(limits["max_abs_vega"]),
+            "max_drawdown": float(limits["max_drawdown"]),
+            "max_concentration": float(limits["max_concentration"]),
+        }
+        if "margin_buffer" in limits:
+            limit_kwargs["margin_buffer"] = float(limits["margin_buffer"])
+        risk_limits = RiskLimits(**limit_kwargs)
         ctx = RiskContext(
             portfolio=Portfolio(
                 equity=float(context.get("equity", 0.0)),
@@ -249,7 +365,7 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         return tail
 
     def run_experiment(
-        config: dict[str, Any],
+        config: VRPConfigSpec,
         n_days: int = 40,
         spot: float = 100.0,
         rate: float = 0.05,
@@ -264,7 +380,13 @@ def build_tools(journal: EventLog) -> tuple[Callable[..., Any], ...]:
         market and returns the out-of-sample Sharpe and deflated Sharpe.
         The experiment result is journaled so subsequent claims can cite it.
         """
-        vrp_config = VRPConfig(**{k: v for k, v in config.items() if v is not None})
+        # Members are validated against VRPConfigSpec at the MCP boundary, so
+        # the types are known-good here; mypy cannot see through **kwargs of a
+        # heterogeneous TypedDict. Nulls are dropped so an omitted member keeps
+        # the strategy default (the three nullable filters default to None
+        # anyway, so "null" and "absent" agree).
+        overrides: dict[str, Any] = {k: v for k, v in config.items() if v is not None}
+        vrp_config = VRPConfig(**overrides)
         market = SyntheticVRPMarket(
             n_days=max(n_days, 20),
             spot=spot,
@@ -327,7 +449,9 @@ def create_server(journal_dir: Path = _DEFAULT_JOURNAL_DIR, run_id: str | None =
     """
     # Optional extra: resolvable only with `pip install "optitrade-pro[mcp]"`.
     try:
-        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
+        # Under mcp >= 2.0 the module still exists but no longer exports the
+        # name, so this is an attr-defined miss rather than a missing module.
+        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found,attr-defined]
     except ImportError:
         try:
             # mcp >= 2.0 renamed FastMCP to MCPServer (same tool/run API).
@@ -359,7 +483,17 @@ def main() -> None:
     create_server(journal_dir=args.journal_dir).run()
 
 
-__all__ = ["build_tools", "create_server", "main"]
+__all__ = [
+    "GreeksSpec",
+    "LimitsSpec",
+    "OrderSpec",
+    "PositionSpec",
+    "RiskContextSpec",
+    "VRPConfigSpec",
+    "build_tools",
+    "create_server",
+    "main",
+]
 
 if __name__ == "__main__":
     main()

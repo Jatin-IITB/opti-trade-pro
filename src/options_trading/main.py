@@ -1,6 +1,7 @@
 # src/options_trading/main.py
 """FastAPI main application entry point. Fixed authentication integration and error handling."""
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -11,24 +12,38 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from optitrade.data import SnapshotStore
+from optitrade.desk import KillSwitch
+
+from .api.routes.analysts import router as analysts_router
 from .api.routes.analytics import router as analytics_router
 from .api.routes.auth import router as auth_router
 from .api.routes.backtesting import router as backtesting_router
 from .api.routes.capture import router as capture_router
+from .api.routes.connectors import router as connectors_router
 from .api.routes.dashboard import router as dashboard_router
+from .api.routes.desk import router as desk_router
 from .api.routes.market_data import router as market_data_router
+from .api.routes.portfolio import router as portfolio_router
 from .config.settings import get_settings
 from .market_data.manager import MarketDataManager
+from .services.analyst_service import AnalystService, analyst_config_from_settings
 from .services.auth_service import AuthService
+from .services.book_snapshot_store import BookSnapshotStore
+from .services.capture_control import autostart_if_configured
 from .services.dashboard_service import DashboardService
+from .services.desk_service import DeskService, desk_config_from_settings
+from .services.desk_state_store import DeskStateStore
+from .services.history_analytics import HistoryAnalytics, history_config_from_settings
 from .services.live_pipeline import LivePipelineConfig, LivePipelineService
 from .services.market_data_service import MarketDataService
-from .services.strategy_service import StrategyService
+from .services.portfolio_client import UpstoxPortfolioClient
+from .services.portfolio_sync_service import PortfolioSyncConfig, PortfolioSyncService
+from .services.token_provider import get_token_provider
 from .services.websocket_manager import WebSocketManager
 from .utils.cache import AsyncCache
 from .utils.exceptions import OptionsTradinError  # keeping your class name as provided
@@ -38,6 +53,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 websocket_manager = WebSocketManager()
+
+
+def frontend_dist_path() -> Path:
+    """Directory holding the built React app, or a non-existent path.
+
+    Module-level so tests can point it elsewhere: the served-vs-missing branch
+    is a real behaviour difference and both sides need covering.
+    """
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -52,10 +76,64 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.websocket_manager = websocket_manager
 
     logger.info("📡 Initializing live pipeline service...")
+
+    def _current_book():
+        """Late-bound lookup: the sync service is created after the pipeline."""
+        svc = getattr(app.state, "portfolio_sync", None)
+        return svc.get_book_context() if svc is not None else None
+
+    # Replay-backed panels (VRP signal, backtest). Reads the same Parquet
+    # store the capture schedule writes, so it needs no broker connection —
+    # it works offline and reports how much history it is still missing.
+    book_store = BookSnapshotStore(Path(settings.book_snapshot_store_path))
+    app.state.book_snapshot_store = book_store
+
+    history_analytics = HistoryAnalytics(
+        SnapshotStore(Path(settings.snapshot_store_path)),
+        history_config_from_settings(),
+        book_store,
+    )
+    app.state.history_analytics = history_analytics
+
+    # The paper desk. Reads the same Parquet store, runs the quant core's
+    # daily cycle, and books PAPER fills into its own notional account — it
+    # holds no broker client and cannot place an order. One instance per app:
+    # it serialises advances internally, and a second would let two runs
+    # start from the same book.
+    desk_service = DeskService(
+        SnapshotStore(Path(settings.snapshot_store_path)),
+        DeskStateStore(Path(settings.desk_state_path)),
+        Path(settings.desk_journal_dir),
+        KillSwitch(Path(settings.desk_kill_switch_path)),
+        desk_config_from_settings(),
+    )
+    app.state.desk_service = desk_service
+
+    # The analysts read the journal the desk writes and explain it, auditing
+    # every claim they make against the events they cite. Read-only: this
+    # service never appends to the journal. One instance per app so the cache
+    # and the shared in-flight replay are shared across callers.
+    analyst_service = AnalystService(
+        Path(settings.desk_journal_dir),
+        analyst_config_from_settings(),
+    )
+    app.state.analyst_service = analyst_service
+
     app.state.live_pipeline = LivePipelineService(
         ws_manager=websocket_manager,
         config=LivePipelineConfig(),
+        book_fn=_current_book,
+        history=history_analytics,
+        desk=desk_service,
+        analysts=analyst_service,
+        store=SnapshotStore(Path(settings.snapshot_store_path)),
     )
+
+    # Seed the dashboard from the last stored capture so a restart outside
+    # market hours shows the market as it last was, labelled stale, rather
+    # than nothing at all until the next trading day. Reads local disk only:
+    # no broker call, no token, so it runs before and regardless of auth.
+    await app.state.live_pipeline.warm_start_from_store()
 
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
@@ -69,10 +147,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.auth_service = auth_service
     logger.info("🔐 AuthService initialized")
 
+    # Shared by every long-running service acting for this user, so one
+    # resolution (and one refresh) serves them all.
+    token_provider = get_token_provider(app)
+
     # Try to initialize core services with authentication
     try:
-        async with auth_service as auth:
-            access_token = await auth.get_valid_access_token()
+        access_token = await token_provider.get()
         logger.info("✅ Valid access token obtained")
 
         # Initialize MarketDataManager with authenticated token
@@ -84,13 +165,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_service = MarketDataService(market_data_manager=market_data_manager)
         logger.info("📊 MarketDataService initialized")
 
-        app.state.dashboard_service = DashboardService(market_data_manager=market_data_manager)
+        app.state.dashboard_service = DashboardService(
+            market_data_manager=market_data_manager,
+            book_fn=_current_book,
+            spot_fn=app.state.live_pipeline.get_latest_spot,
+        )
         logger.info("📊 DashboardService initialized")
 
-        app.state.strategy_service = StrategyService(
-            market_data_service=app.state.market_data_service
+        # Portfolio sync resolves a fresh token per request via the provider,
+        # so it survives the daily Upstox token expiry. spot_fn comes from the
+        # live pipeline so portfolio Greeks price against real spot.
+        portfolio_client = UpstoxPortfolioClient(token_provider=token_provider)
+        portfolio_sync = PortfolioSyncService(
+            client=portfolio_client,
+            ws_manager=websocket_manager,
+            config=PortfolioSyncConfig(),
+            spot_fn=app.state.live_pipeline.get_latest_spot,
+            # Each sync records the priced book; two end-of-day records are
+            # what the P&L explain panel decomposes.
+            book_store=book_store,
         )
-        logger.info("📈 StrategyService initialized")
+        app.state.portfolio_sync = portfolio_sync
+        app.state._portfolio_sync_task = asyncio.create_task(portfolio_sync.run())
+        logger.info("📋 PortfolioSyncService initialized")
+
+        # Start the capture schedule: it is the only source of live analytics
+        # data. Without it every analytics tab renders bundled demo data.
+        if await autostart_if_configured(app, token_provider):
+            logger.info("📸 Capture schedule auto-started")
 
     except Exception as e:
         logger.warning(f"⚠️ Core services initialization failed: {e}")
@@ -99,12 +201,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.market_data_manager = None
         app.state.market_data_service = None
         app.state.dashboard_service = None
-        app.state.strategy_service = None
+        app.state.portfolio_sync = None
 
     yield
 
     # Shutdown
     logger.info("🛑 Shutting down background tasks...")
+    portfolio_sync = getattr(app.state, "portfolio_sync", None)
+    if portfolio_sync is not None:
+        portfolio_sync.stop()
+        sync_task = getattr(app.state, "_portfolio_sync_task", None)
+        if sync_task is not None:
+            sync_task.cancel()
+        logger.info("📋 PortfolioSyncService stopped")
+
+    capture_scheduler = getattr(app.state, "capture_scheduler", None)
+    if capture_scheduler is not None:
+        capture_scheduler.stop()
+        capture_task = getattr(app.state, "capture_scheduler_task", None)
+        if capture_task is not None:
+            capture_task.cancel()
+        logger.info("📸 Capture scheduler stopped")
     if hasattr(app.state, "cache"):
         logger.info("💾 Cache cleared")
     logger.info("👋 Shutting down Options Trading Platform")
@@ -157,16 +274,6 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
-    # Static files and templates
-    here = Path(__file__).parent
-    static_dir = here / "static"
-    templates_dir = here / "templates"
-
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-    templates = Jinja2Templates(directory=templates_dir) if templates_dir.exists() else None
-
     # Routers
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(dashboard_router, prefix="/api/v1")
@@ -174,6 +281,14 @@ def create_app() -> FastAPI:
     app.include_router(backtesting_router, prefix="/api/v1")
     app.include_router(analytics_router, prefix="/api/v1")
     app.include_router(capture_router, prefix="/api/v1")
+    app.include_router(connectors_router, prefix="/api/v1")
+    app.include_router(portfolio_router, prefix="/api/v1")
+    app.include_router(desk_router, prefix="/api/v1")
+    # Registered here, with the other routers, and NOT after the StaticFiles
+    # mount at the bottom of this function: the mount serves index.html for
+    # any unmatched path, so a router added below it would answer every
+    # /api/v1/analysts/* call with the HTML shell at status 200.
+    app.include_router(analysts_router, prefix="/api/v1")
 
     # Exception handlers
     @app.exception_handler(OptionsTradinError)
@@ -220,110 +335,30 @@ def create_app() -> FastAPI:
             },
         }
 
-    @app.get("/", tags=["Root"])
-    async def root():
-        return {
-            "message": "Options Trading Platform v2.1",
-            "docs": "/docs",
-            "health": "/health",
-            "auth": "/api/v1/auth/login",
-            "dashboard": "/dashboard",
-        }
+    # The React app is the only dashboard. It is served from here in
+    # production so the whole product lives on one origin: same-origin means
+    # no CORS, and the OAuth session cookie is not at the mercy of a dev
+    # proxy forwarding it. `npm run build` produces frontend/dist.
+    #
+    # Mounted last, after every router, so it can never shadow /api. Guarded
+    # on the directory existing, so a backend-only checkout still starts and
+    # says what is missing instead of 404ing into confusion.
+    frontend_dist = frontend_dist_path()
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_page(request: Request):
-        """Dashboard page with proper authentication checking."""
-        try:
-            authenticated = False
-            user_id = None
-            try:
-                if request.session.get("authenticated") is True:
-                    user_id = request.session.get("authenticated_user_id")
-                    if user_id:
-                        authenticated = True
-            except Exception:
-                authenticated = False
+    if frontend_dist.is_dir():
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="app")
+    else:
 
-            if not authenticated:
-                auth_service = getattr(request.app.state, "auth_service", None)
-                if auth_service is None:
-                    auth_service = AuthService()
-                    request.app.state.auth_service = auth_service
-                try:
-                    stored_users = await auth_service.storage.list_stored_users()
-                    if stored_users:
-                        user_id = stored_users[0]
-                        try:
-                            request.session["authenticated"] = True
-                            request.session["authenticated_user_id"] = user_id
-                        except Exception:
-                            pass
-                        authenticated = True
-                except Exception:
-                    authenticated = False
-
-            if not authenticated:
-                logger.info("User not authenticated, redirecting to login")
-                return RedirectResponse(url="/api/v1/auth/login")
-
-            if not getattr(request.app.state, "market_data_manager", None):
-                try:
-                    async with request.app.state.auth_service as auth:
-                        access_token = await auth.get_valid_access_token(user_id or "default")
-                    from .utils.app_init import initialize_app_services
-
-                    await initialize_app_services(
-                        request.app, access_token=access_token, user_id=user_id
-                    )
-                except Exception:
-                    return RedirectResponse(url="/api/v1/auth/login")
-
-            # If we reach here, user is authenticated and services are initialized
-            user_context = {
-                "user_id": user_id or "default",
-                "user_name": "Trader",
-                "email": "N/A",
-                "authenticated": True,
-            }
-
-            try:
-                async with request.app.state.auth_service as auth:
-                    token = await auth.get_valid_access_token(user_id or "default")
-                    profile = await auth.get_user_profile(token)
-                user_context.update(
-                    {
-                        "user_id": profile.user_id,
-                        "user_name": profile.user_name or "Trader",
-                        "email": profile.email or "N/A",
-                    }
-                )
-            except Exception:
-                pass
-
-            if templates:
-                return templates.TemplateResponse(
-                    "index.html",
-                    {
-                        "request": request,
-                        **user_context,
-                        "api_base": "/api/v1",
-                        "websocket_url": "ws://localhost:8000/api/v1/dashboard/ws",
-                    },
-                )
-            else:
-                return HTMLResponse(
-                    content=f"""
-                    <html><body>
-                    <h1>Welcome to your trading dashboard!</h1>
-                    <p>Dashboard template not found. Using fallback interface.</p>
-                    <p>Place your templates in:<br/><code>{(Path(__file__).parent / "templates")}</code></p>
-                    </body></html>
-                    """,
-                    status_code=200,
-                )
-        except Exception as e:
-            logger.error(f"Dashboard rendering error: {e}", exc_info=True)
-            return HTMLResponse("Internal error", status_code=500)
+        @app.get("/", tags=["Root"], response_class=HTMLResponse)
+        async def frontend_not_built() -> HTMLResponse:
+            """Say the build is missing rather than serving nothing."""
+            return HTMLResponse(
+                "<h1>Frontend not built</h1>"
+                "<p>Run <code>cd frontend &amp;&amp; npm run build</code>, then reload. "
+                "The API is already running: see <a href='/docs'>/docs</a> "
+                "and <a href='/health'>/health</a>.</p>",
+                status_code=503,
+            )
 
     return app
 

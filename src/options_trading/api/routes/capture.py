@@ -16,8 +16,15 @@ from optitrade.data import SnapshotStore
 
 from ...config.settings import settings
 from ...services.auth_service import AuthService
-from ...services.capture_scheduler import CaptureScheduler, ScheduleConfig, SchedulerStatus
-from ...services.capture_service import CaptureReport, UpstoxCaptureSource, capture_and_store
+from ...services.capture_control import (
+    CaptureTarget,
+    is_schedule_running,
+    resolve_autostart_target,
+    start_schedule,
+)
+from ...services.capture_scheduler import CaptureScheduler, SchedulerStatus
+from ...services.capture_service import UpstoxCaptureSource, capture_and_store
+from ...services.token_provider import get_token_provider
 from ...utils.exceptions import DataQualityError
 from ..dependencies import get_auth_service
 
@@ -128,59 +135,36 @@ async def start_capture_schedule(
     request: Request,
     access_token: str = Depends(get_access_token),
 ) -> dict[str, Any]:
-    """Start unattended interval capture for one underlying/expiry.
+    """Start unattended interval capture for one explicit underlying/expiry.
 
-    Deliberately operator-initiated: nothing auto-starts at app startup,
-    because a schedule needs a live Upstox token and a chosen expiry — both
-    operator decisions. Returns 409 if a scheduler is already running; stop it
-    via POST /capture/schedule/stop first.
+    The app also auto-starts a schedule on the nearest expiry at boot (see
+    ``settings.capture_autostart``); this endpoint is for overriding that
+    choice. Returns 409 if a scheduler is already running; stop it via
+    POST /capture/schedule/stop first.
     """
-    task = getattr(request.app.state, "capture_scheduler_task", None)
-    if task is not None and not task.done():
+    if is_schedule_running(request.app):
         raise HTTPException(
             status_code=409,
             detail="Capture scheduler already running; stop it via /capture/schedule/stop",
         )
+
+    target = CaptureTarget(
+        underlying=body.underlying,
+        instrument_key=body.instrument_key,
+        expiry_date=body.expiry_date,
+        interval_seconds=body.interval_seconds or settings.capture_interval_seconds,
+    )
     try:
-        # Built once and reused: fetch_chain re-reads its clock per capture.
-        # Also validates expiry_date up front instead of failing every cycle.
-        source = UpstoxCaptureSource(
-            access_token=access_token,
-            instrument_key=body.instrument_key,
-            expiry_date=body.expiry_date,
-        )
+        start_schedule(request.app, target, get_token_provider(request.app))
     except DataQualityError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    store = _snapshot_store()
-    underlying = body.underlying
-
-    pipeline = getattr(request.app.state, "live_pipeline", None)
-
-    def capture_once() -> CaptureReport:
-        report = capture_and_store(source, store, underlying)
-        if pipeline is not None:
-            chain = source.fetch_chain(underlying)
-            pipeline.cache_chain(chain)
-        return report
-
-    interval = body.interval_seconds or settings.capture_interval_seconds
-    scheduler = CaptureScheduler(
-        capture_fn=capture_once,
-        config=ScheduleConfig(interval_seconds=interval),
-        on_capture=pipeline.on_capture if pipeline is not None else None,
-    )
-    request.app.state.capture_scheduler = scheduler
-    request.app.state.capture_scheduler_task = asyncio.create_task(scheduler.run())
-    logger.info(
-        "Capture scheduler started: %s expiry %s every %ss", underlying, body.expiry_date, interval
-    )
     return {
         "started": True,
-        "underlying": underlying,
-        "instrument_key": body.instrument_key,
-        "expiry_date": body.expiry_date,
-        "interval_seconds": interval,
+        "underlying": target.underlying,
+        "instrument_key": target.instrument_key,
+        "expiry_date": target.expiry_date,
+        "interval_seconds": target.interval_seconds,
     }
 
 
@@ -205,8 +189,42 @@ async def stop_capture_schedule(request: Request) -> dict[str, Any]:
     return {"stopped": True, **_scheduler_status_payload(scheduler)}
 
 
+@router.post("/schedule/auto")
+async def start_capture_schedule_auto(
+    request: Request,
+    access_token: str = Depends(get_access_token),
+) -> dict[str, Any]:
+    """Start capture on the nearest tradable expiry, resolving the target itself.
+
+    The UI-facing counterpart to ``/schedule/start``: the caller does not need
+    to know the instrument key or expiry ladder.
+    """
+    if is_schedule_running(request.app):
+        raise HTTPException(
+            status_code=409,
+            detail="Capture scheduler already running; stop it via /capture/schedule/stop",
+        )
+    try:
+        target = await resolve_autostart_target(access_token)
+    except DataQualityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    start_schedule(request.app, target, get_token_provider(request.app))
+    return {
+        "started": True,
+        "underlying": target.underlying,
+        "instrument_key": target.instrument_key,
+        "expiry_date": target.expiry_date,
+        "interval_seconds": target.interval_seconds,
+    }
+
+
 @router.get("/schedule/status")
 async def capture_schedule_status(request: Request) -> dict[str, Any]:
     """Live scheduler status plus the most recent capture outcomes (max 100)."""
     scheduler = getattr(request.app.state, "capture_scheduler", None)
-    return _scheduler_status_payload(scheduler)
+    target = getattr(request.app.state, "capture_target", None)
+    return {
+        **_scheduler_status_payload(scheduler),
+        "target": dataclasses.asdict(target) if target is not None else None,
+    }

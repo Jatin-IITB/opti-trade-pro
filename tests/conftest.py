@@ -7,6 +7,8 @@ Provides common test fixtures and setup for unit and integration tests.
 import asyncio
 import json
 import os
+import pathlib
+import sys
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +17,13 @@ import pandas as pd
 import pytest
 import pytest_asyncio
 
+# The editable install writes one absolute src path into the venv, so a git
+# worktree imports the *other* checkout's code while running its own tests —
+# a green suite that proves nothing about the branch under test. Point sys.path
+# at the tree these tests belong to before anything imports the packages.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
 # Settings instantiate at import inside options_trading; give the required
 # fields harmless defaults so the suite runs without a .env (CI included).
 os.environ.setdefault("UPSTOX_API_KEY", "test_api_key")
@@ -22,8 +31,37 @@ os.environ.setdefault("UPSTOX_SECRET_KEY", "test_secret_key")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-ci")
 os.environ.setdefault("DEBUG", "true")
 
-from options_trading.models.auth import TokenInfo
-from options_trading.services.auth_service import AuthService
+# Forced empty, not setdefault: the suite must never see a real Analytics
+# Token. TokenProvider reads it from settings, so a developer who has one in
+# .env takes a different branch in fourteen tests than CI does — the suite
+# would pass or fail depending on whose machine ran it, which is the same
+# class of defect as depending on the wall clock.
+#
+# It is also a disclosure risk. A failing assertion prints both sides of the
+# comparison, so a real token would land in pytest output and CI logs in
+# plaintext. Environment variables take precedence over .env in
+# pydantic-settings, so this neutralises it wherever it is configured; tests
+# that exercise the Analytics Token path set it explicitly via monkeypatch.
+os.environ["UPSTOX_ANALYTICS_TOKEN"] = ""
+
+# E402: these must follow the sys.path and os.environ setup above — importing
+# them earlier is the bug this block exists to prevent.
+import options_trading  # noqa: E402
+import optitrade  # noqa: E402
+from options_trading.models.auth import TokenInfo  # noqa: E402
+from options_trading.services.auth_service import AuthService  # noqa: E402
+
+# Fail closed if something still shadows the local source: a wrong-tree import
+# is indistinguishable from a passing branch, which is the worst failure mode
+# a test suite can have.
+for _package in (options_trading, optitrade):
+    _origin = pathlib.Path(_package.__file__ or "").resolve()
+    if REPO_ROOT not in _origin.parents:
+        raise RuntimeError(
+            f"{_package.__name__} resolved to {_origin}, outside this checkout "
+            f"({REPO_ROOT}). The suite would test code from another tree. "
+            f"Check the editable install's .pth file and PYTHONPATH."
+        )
 
 
 @pytest.fixture(scope="session")

@@ -1,9 +1,9 @@
 # src/options_trading/api/tools/live_contracts.py
 import pandas as pd
-import requests
 
 from ...config.settings import settings
 from ...utils.exceptions import APIError, DataQualityError
+from ...utils.http import get_session
 
 URL = settings.upstox_option_contracts_url
 
@@ -17,7 +17,9 @@ def fetch_live_option_contracts_df(
         "Api-Version": settings.default_api_version,
     }
     params = {"instrument_key": instrument_key, "expiry": expiry_date}
-    resp = requests.get(URL, headers=headers, params=params, timeout=settings.api_timeout_seconds)
+    resp = get_session().get(
+        URL, headers=headers, params=params, timeout=settings.api_timeout_seconds
+    )
     if resp.status_code != 200:
         raise APIError(f"Live contracts HTTP {resp.status_code}: {resp.text}")
 
@@ -51,3 +53,38 @@ def fetch_live_option_contracts_df(
         raise DataQualityError("No live contracts in response")
 
     return df.set_index("instrument_key")
+
+
+def fetch_live_option_expiries(instrument_key: str, access_token: str) -> list[str]:
+    """List tradable expiries for an underlying, soonest first, as YYYY-MM-DD.
+
+    Calls ``/v2/option/contract`` without an ``expiry`` filter, which returns
+    every live contract for the instrument; the distinct expiry dates are the
+    tradable expiry ladder.
+    """
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}",
+        "Api-Version": settings.default_api_version,
+    }
+    resp = get_session().get(
+        URL,
+        headers=headers,
+        params={"instrument_key": instrument_key},
+        timeout=settings.api_timeout_seconds,
+    )
+    if resp.status_code != 200:
+        raise APIError(f"Live contracts HTTP {resp.status_code}: {resp.text}")
+
+    payload = resp.json()
+    if payload.get("status") != "success":
+        raise APIError(f"Live contracts API error: {payload}")
+
+    data = payload.get("data", [])
+    if not data:
+        raise DataQualityError(f"No live contracts for {instrument_key}")
+
+    expiries = sorted({row["expiry"][:10] for row in data if row.get("expiry")})
+    if not expiries:
+        raise DataQualityError(f"Live contracts for {instrument_key} carry no expiry dates")
+    return expiries

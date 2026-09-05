@@ -9,6 +9,7 @@ import {
   Area,
   ComposedChart,
 } from "recharts";
+import { percent, type TooltipValue } from "../lib/chartFormat";
 
 interface Props {
   data: {
@@ -103,8 +104,8 @@ export function VrpSignal({ data }: Props) {
                 color: "#f1f5f9",
                 fontSize: 12,
               }}
-              formatter={(value: number, name: string) => [
-                `${value.toFixed(2)}%`,
+              formatter={(value: TooltipValue, name) => [
+                percent(value),
                 name === "iv" ? "Implied Vol" : "Realized Vol",
               ]}
             />
@@ -162,7 +163,7 @@ export function VrpSignal({ data }: Props) {
                 color: "#f1f5f9",
                 fontSize: 12,
               }}
-              formatter={(value: number) => [`${value.toFixed(2)}%`, "Spread"]}
+              formatter={(value: TooltipValue) => [percent(value), "Spread"]}
             />
             <ReferenceLine
               y={data.entryThreshold * 100}

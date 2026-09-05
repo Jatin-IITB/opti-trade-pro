@@ -87,21 +87,21 @@ class RateLimitError(APIError):
 
     def __init__(self, message: str = "API rate limit exceeded", retry_after: int | None = None):
         self.retry_after = retry_after
-        super().__init__(message, error_code="RATE_LIMIT_EXCEEDED")
+        super().__init__(message)
 
 
 class NetworkError(APIError):
     """Raised for network-related errors."""
 
     def __init__(self, message: str = "Network error occurred"):
-        super().__init__(message, error_code="NETWORK_ERROR")
+        super().__init__(message)
 
 
 class TimeoutError(APIError):
     """Raised when API request times out."""
 
     def __init__(self, message: str = "Request timed out"):
-        super().__init__(message, error_code="REQUEST_TIMEOUT")
+        super().__init__(message)
 
 
 # Data Exceptions
@@ -208,20 +208,6 @@ class TradingError(OptionsTradinError):
     """Base trading error."""
 
     pass
-
-
-class BrokerageCalculationError(TradingError):
-    """Raised when brokerage calculation fails."""
-
-    def __init__(self, message: str = "Brokerage calculation failed"):
-        super().__init__(message, error_code="BROKERAGE_CALCULATION_ERROR")
-
-
-class MarginCalculationError(TradingError):
-    """Raised when margin calculation fails."""
-
-    def __init__(self, message: str = "Margin calculation failed"):
-        super().__init__(message, error_code="MARGIN_CALCULATION_ERROR")
 
 
 class InsufficientFundsError(TradingError):

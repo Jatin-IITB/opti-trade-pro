@@ -58,8 +58,9 @@ export function GreeksBook({ data }: Props) {
         <div>
           <h2 className="text-xl font-semibold text-slate-100">Greeks Book</h2>
           <p className="text-sm text-slate-400">
-            {data.positions.length} positions — aggregated risk view with
-            cross-validated Greeks
+            {data.positions.length} legs — analytic Black&ndash;Scholes Greeks.
+            The engine is cross-validated against adjoint AD, JAX autodiff and
+            finite differences in <code>test_greeks_cross.py</code>.
           </p>
         </div>
         <div className="text-right text-xs text-slate-400">

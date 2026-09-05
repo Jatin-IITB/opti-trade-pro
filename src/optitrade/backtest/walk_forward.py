@@ -55,6 +55,12 @@ _SECONDS_PER_YEAR = 365.0 * _SECONDS_PER_DAY  # ACT/365 per ADR-003
 _EXPIRY_EPS = 1e-9  # year fraction at/below which a position has expired
 _QUANTITY_EPS = 1e-12  # net quantities below this close a position
 _MIN_MARK_EXPIRY = 1e-6  # floor when marking near-expiry positions
+# A fold needs at least two days in each of train and test: one day yields no
+# return series, so its Sharpe is undefined and the fold cannot rank configs.
+_MIN_FOLD_DAYS = 2
+# Scan bound for min_days_for_walk_forward; only a near-degenerate train_frac
+# (ratio in the hundreds) approaches it.
+_MAX_MIN_DAYS_SCAN = 100_000
 
 C = TypeVar("C")
 
@@ -469,6 +475,39 @@ def _review_and_fill(
     return True, cost
 
 
+def min_days_for_walk_forward(n_folds: int = 4, train_frac: float = 0.6) -> int:
+    """Fewest replay days :func:`run_walk_forward` accepts for these settings.
+
+    Callers with a growing history (a live capture that has run for a week)
+    need to know how much more data to wait for, and answering that by
+    catching the ``ValueError`` costs a full replay build. This mirrors the
+    fold arithmetic in :func:`run_walk_forward` exactly and is pinned to it by
+    ``test_min_days_matches_run_walk_forward``, so the two cannot drift.
+
+    The search is a bounded scan rather than a closed form because both
+    ``test_len`` and ``train_len`` are floor-divided: the inverse of a
+    composition of two floors is not expressible as a single ceiling.
+    """
+    if n_folds < 1:
+        raise ValueError(f"n_folds must be >= 1, got {n_folds}")
+    if not 0.0 < train_frac < 1.0:
+        raise ValueError(f"train_frac must be in (0, 1), got {train_frac}")
+    ratio = train_frac / (1.0 - train_frac)
+    n = _MIN_FOLD_DAYS
+    # Each extra day raises test_len by at most 1, so the first n that clears
+    # both floors is the minimum; the cap keeps a pathological train_frac
+    # (0.999 -> ratio 999) from looping unbounded.
+    while n <= _MAX_MIN_DAYS_SCAN:
+        test_len = int(n / (n_folds + ratio))
+        if test_len >= _MIN_FOLD_DAYS and int(test_len * ratio) >= _MIN_FOLD_DAYS:
+            return n
+        n += 1
+    raise ValueError(
+        f"no day count below {_MAX_MIN_DAYS_SCAN} satisfies {n_folds} folds at "
+        f"train_frac {train_frac}; use fewer folds or a less extreme split"
+    )
+
+
 def run_walk_forward(
     strategy_factory: Callable[[C], Strategy],
     param_grid: Sequence[C],
@@ -503,10 +542,11 @@ def run_walk_forward(
     ratio = train_frac / (1.0 - train_frac)
     test_len = int(n / (n_folds + ratio))
     train_len = int(test_len * ratio)
-    if test_len < 2 or train_len < 2:
+    if test_len < _MIN_FOLD_DAYS or train_len < _MIN_FOLD_DAYS:
         raise ValueError(
             f"{n} days is too short for {n_folds} folds at train_frac {train_frac} "
-            f"(train {train_len}, test {test_len} days per fold)"
+            f"(train {train_len}, test {test_len} days per fold); "
+            f"needs at least {min_days_for_walk_forward(n_folds, train_frac)}"
         )
 
     folds: list[FoldResult[C]] = []
@@ -595,6 +635,7 @@ __all__ = [
     "BacktestResult",
     "FoldResult",
     "WalkForwardResult",
+    "min_days_for_walk_forward",
     "run_backtest",
     "run_walk_forward",
 ]

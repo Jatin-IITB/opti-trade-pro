@@ -54,7 +54,16 @@ class DebatePanel:
         self._approval_threshold = approval_threshold
         self._journal = journal
 
-    def deliberate(self, proposal: TradeProposal) -> DecisionRecord:
+    def deliberate(
+        self, proposal: TradeProposal, correlation_id: str | None = None
+    ) -> DecisionRecord:
+        """Convene the panel; journals the record under ``correlation_id``.
+
+        Passed in by the daily desk cycle so the deliberation joins that
+        cycle's causal group, and minted fresh for standalone callers. See
+        the matching note on :meth:`optitrade.risk.engine.RiskEngine.review`
+        (ADR-009).
+        """
         opinions = tuple(self._opinion_of(expert, proposal) for expert in self._experts)
         total = sum(op.confidence for op in opinions)
         approve_weight = sum(op.confidence for op in opinions if op.stance is Stance.APPROVE)
@@ -75,7 +84,7 @@ class DebatePanel:
         rationale = self._rationale(opinions, score, vetoes, consensus)
         order = proposal.order
         summary = f"{order.symbol} qty {order.quantity:+g} @ {order.price:g}: {proposal.thesis}"
-        correlation_id = str(uuid.uuid4())
+        correlation_id = correlation_id or str(uuid.uuid4())
         record = DecisionRecord(
             proposal_summary=summary,
             opinions=opinions,

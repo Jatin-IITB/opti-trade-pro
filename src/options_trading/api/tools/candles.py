@@ -1,9 +1,9 @@
 # api/candles.py
 import pandas as pd
-import requests
 
 from ...config.settings import settings
 from ...utils.exceptions import APIError, DataQualityError
+from ...utils.http import get_session
 
 UPSTOX_OPTION_CANDLES_URL = settings.upstox_option_candles_url
 UPSTOX_SPOT_CANDLES_URL = settings.upstox_spot_candles_url
@@ -17,7 +17,7 @@ def fetch_option_candles(
         "Accept": "application/json",
         "Authorization": f"Bearer {access_token}",
     }
-    resp = requests.get(url, headers=headers)
+    resp = get_session().get(url, headers=headers, timeout=settings.api_timeout_seconds)
     if resp.status_code != 200:
         raise APIError(f"Option candle fetch HTTP {resp.status_code}: {resp.text}")
     payload = resp.json()
@@ -45,7 +45,7 @@ def fetch_upstox_historical_data(
         "Authorization": f"Bearer {access_token}",
     }
     url = f"{UPSTOX_SPOT_CANDLES_URL}/{instrument_token}/{unit}/{interval}/{to_date}/{from_date}"
-    response = requests.get(url, headers=headers)
+    response = get_session().get(url, headers=headers, timeout=settings.api_timeout_seconds)
     if response.status_code != 200:
         raise APIError(f"Spot candle fetch HTTP {response.status_code}: {response.text}")
     data = response.json()

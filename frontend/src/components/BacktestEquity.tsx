@@ -10,6 +10,7 @@ import {
   Bar,
   Cell,
 } from "recharts";
+import { rupees, type TooltipValue } from "../lib/chartFormat";
 
 interface Fold {
   fold: number;
@@ -25,13 +26,16 @@ interface Props {
     dailyPnl: number[];
     drawdown: number[];
     sharpe: number;
+    oosSharpe: number;
     deflatedSharpe: number;
     maxDrawdown: number;
     totalCosts: number;
     nTrades: number;
+    nTrials: number;
     initialEquity: number;
     nDays: number;
     folds: Fold[];
+    note?: string | null;
   };
 }
 
@@ -61,8 +65,9 @@ export function BacktestEquity({ data }: Props) {
             Walk-Forward Backtest
           </h2>
           <p className="text-sm text-slate-400">
-            {data.nDays}-day OOS equity curve with {data.folds.length}-fold
-            cross-validation and deflated Sharpe
+            {data.nDays}-day <span className="text-amber-400/90">in-sample</span>{" "}
+            equity curve; {data.folds.length}-fold walk-forward below is the
+            out-of-sample result
           </p>
         </div>
         <div className="text-right">
@@ -74,18 +79,30 @@ export function BacktestEquity({ data }: Props) {
             {totalReturn >= 0 ? "+" : ""}
             {totalReturn.toFixed(1)}%
           </div>
-          <div className="text-xs text-slate-500">total return</div>
+          <div className="text-xs text-slate-500">in-sample return</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-3">
+      {data.note && (
+        <div className="rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-xs leading-relaxed text-amber-200/80">
+          {data.note}
+        </div>
+      )}
+
+      <div className="grid grid-cols-6 gap-3">
         {(
           [
-            ["Sharpe", data.sharpe.toFixed(2), "annualized"],
+            ["Sharpe", data.sharpe.toFixed(2), "in-sample"],
+            ["OOS Sharpe", data.oosSharpe.toFixed(2), "walk-forward"],
             [
-              "Deflated Sharpe",
-              data.deflatedSharpe.toFixed(2),
-              "trial-adjusted",
+              // Bailey & López de Prado's DSR is a PROBABILITY in [0, 1] that
+              // the OOS Sharpe beats the best of nTrials unskilled trials —
+              // not a Sharpe ratio. Rendered as "0.31" next to "Sharpe 1.42"
+              // it reads as a deflated ratio, which is a different and much
+              // more flattering number.
+              "P(skill)",
+              `${(data.deflatedSharpe * 100).toFixed(0)}%`,
+              `deflated over ${data.nTrials} trials`,
             ],
             [
               "Max Drawdown",
@@ -149,10 +166,7 @@ export function BacktestEquity({ data }: Props) {
                 color: "#f1f5f9",
                 fontSize: 12,
               }}
-              formatter={(value: number) => [
-                `₹${value.toLocaleString()}`,
-                "Equity",
-              ]}
+              formatter={(value: TooltipValue) => [rupees(value), "Equity"]}
             />
             <ReferenceLine
               y={data.initialEquity}
@@ -193,10 +207,7 @@ export function BacktestEquity({ data }: Props) {
                 color: "#f1f5f9",
                 fontSize: 12,
               }}
-              formatter={(value: number) => [
-                `₹${value.toLocaleString()}`,
-                "P&L",
-              ]}
+              formatter={(value: TooltipValue) => [rupees(value), "P&L"]}
             />
             <ReferenceLine y={0} stroke="#475569" />
             <Bar dataKey="pnl" radius={[1, 1, 0, 0]}>

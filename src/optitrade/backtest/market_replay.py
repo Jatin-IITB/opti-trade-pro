@@ -265,9 +265,13 @@ class StoreReplay:
       stored dates are trading days. With fewer than 3 spots accumulated the
       estimator is undefined, so ``realized_vol = atm_iv`` as a neutral
       prior — it forces ``vrp = 0`` rather than fabricating a signal before
-      history exists. Spots from dates whose *option chain* failed hygiene
-      still enter the history: the underlying's close is valid data even
-      when the quotes around it are junk.
+      history exists. Those days are flagged ``rv_is_prior = 1.0`` so a
+      consumer can tell a measured zero VRP from an unmeasurable one; a
+      display that averages them in would drag the mean spread toward zero
+      with days that never had a realized-vol estimate. Spots from dates
+      whose *option chain* failed hygiene still enter the history: the
+      underlying's close is valid data even when the quotes around it are
+      junk.
     - **Features**: ``atm_iv`` is the surface vol at the forward-ATM strike
       for ``tenor_days`` (ACT/365). ``term_slope`` is the ATM vol at the
       longest stored expiry minus at the shortest, *per year of expiry gap*
@@ -277,7 +281,9 @@ class StoreReplay:
       as ``vol(0.95 F) - vol(1.05 F)`` at the tenor: a fixed-moneyness proxy
       for the 25-delta wings that avoids a delta inversion on real chains
       (same sign convention — positive for equity-style put skew).
-      ``vrp = atm_iv - realized_vol``.
+      ``vrp = atm_iv - realized_vol``. ``rv_is_prior`` is 1.0 on days where
+      ``realized_vol`` is the neutral prior rather than a measurement (see
+      above), else 0.0.
     - **Eager build**: everything is materialised in ``__init__`` so the
       instance supports cheap re-iteration and ``__len__`` (the
       :class:`MarketReplay` contract); a year of EOD history is only ~250
@@ -374,7 +380,8 @@ class StoreReplay:
         atm_iv = self._scalar_vol(fitted, fitted.forward(tenor), tenor)
 
         window = spots[-self.rv_window :]
-        if len(window) < _MIN_SPOTS_FOR_RV:
+        rv_is_prior = len(window) < _MIN_SPOTS_FOR_RV
+        if rv_is_prior:
             realized_vol = atm_iv  # neutral prior: vrp = 0 until history exists
         else:
             realized_vol = close_to_close_vol(window, periods_per_year=_TRADING_DAYS_PER_YEAR)
@@ -408,6 +415,7 @@ class StoreReplay:
                 "term_slope": term_slope,
                 "skew_25d": skew_25d,
                 "vrp": atm_iv - realized_vol,
+                "rv_is_prior": float(rv_is_prior),
             },
         )
 

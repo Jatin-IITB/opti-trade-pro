@@ -14,8 +14,32 @@ quant core's :class:`~optitrade.core.types.MarketSnapshot` happens in
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from optitrade.core.types import OptionType
+
+
+class ChainSource(str, Enum):  # noqa: UP042 — matches OptionType: explicit str round-trips
+    """How a chain was obtained, because it changes what the numbers mean.
+
+    ``LIVE`` is a quoted snapshot: a real book with real bid/ask, which the
+    hygiene filters in :mod:`optitrade.data.quote_filters` can judge —
+    rejecting crossed books, wide spreads and stale ticks.
+
+    ``BACKFILL`` is reconstructed from historical candles, which carry no book
+    at all. Bid and ask are filled from the traded price, so the spread is
+    identically zero and every spread-based filter passes trivially. The data
+    is real but it is *traded* data, not *quoted* data: no spread to cross, no
+    depth, and a one-minute bar close rather than an instant.
+
+    The distinction is carried rather than inferred because the two are
+    otherwise indistinguishable downstream. A VRP signal that silently mixed
+    them would be comparing a spread-filtered series against an unfiltered
+    one and calling the difference edge.
+    """
+
+    LIVE = "live"
+    BACKFILL = "backfill"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +73,9 @@ class RawChain:
     timestamp: float  # unix epoch seconds (UTC)
     quotes: tuple[RawQuote, ...]
     dividend_yield: float = 0.0
+    #: Provenance. Defaults to LIVE so every existing construction site keeps
+    #: its meaning; only the backfill path sets it otherwise.
+    source: ChainSource = ChainSource.LIVE
 
 
-__all__ = ["RawChain", "RawQuote"]
+__all__ = ["ChainSource", "RawChain", "RawQuote"]

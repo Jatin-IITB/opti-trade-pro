@@ -75,8 +75,20 @@ class RiskEngine:
         self._checks = tuple(checks) if checks is not None else default_checks()
         self._journal = journal
 
-    def review(self, order: Order, ctx: RiskContext) -> RiskDecision:
-        correlation_id = str(uuid.uuid4())
+    def review(
+        self, order: Order, ctx: RiskContext, correlation_id: str | None = None
+    ) -> RiskDecision:
+        """Review one order; journals the decision under ``correlation_id``.
+
+        A caller that is already running under a correlation id (the daily
+        desk cycle) passes it so the risk report joins that causal group. Left
+        as ``None`` — a standalone review, an MCP call, an API probe — a fresh
+        id is minted. Without this the richest record the engine produces was
+        journaled under an id nothing else shared, so
+        ``events_by_correlation`` on a cycle could never reach the reason an
+        order was blocked (ADR-009).
+        """
+        correlation_id = correlation_id or str(uuid.uuid4())
         results = tuple(self._run_check(check, order, ctx) for check in self._checks)
         verdict = max(
             (r.verdict for r in results),

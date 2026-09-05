@@ -1,13 +1,21 @@
 """Tests for the live dashboard analytics payload builder."""
 
+import importlib.util
+
 import pytest
 
+from options_trading.config.settings import settings
 from options_trading.services.live_analytics import (
+    BookContext,
     LiveAnalytics,
     LiveAnalyticsConfig,
     LiveDashboardPayload,
 )
-from optitrade.data.capture import SyntheticSource
+from optitrade.core.types import OptionContract, Portfolio, Position
+from optitrade.data.capture import SyntheticSource, to_market_snapshot
+
+# Higher-order Greeks need the optional jax extra; CI installs only [dev].
+_HAS_JAX = importlib.util.find_spec("jax") is not None
 
 
 @pytest.fixture()
@@ -134,7 +142,7 @@ class TestEssviCalibration:
             assert len(sl["marketVols"]) == len(sl["strikes"])
 
 
-class TestRiskDashboard:
+class TestRiskDashboardShape:
     def test_shape(self, payload):
         rd = payload.risk_dashboard
         assert rd is not None
@@ -174,3 +182,156 @@ class TestDeterminism:
         b = LiveAnalytics().build_from_raw_chain(chain)
         assert a.vol_surface["ivs"] == b.vol_surface["ivs"]
         assert len(a.option_chain["chain"]) == len(b.option_chain["chain"])
+
+
+def _book_from_chain(chain, n_legs: int = 2) -> BookContext:
+    """Build a BookContext from the nearest-expiry ATM strikes of a chain.
+
+    Uses real quotes so the marks are invertible, which is what the book
+    panels require.
+    """
+    snapshot = to_market_snapshot(chain)
+    near = min(q.expiry for q in snapshot.quotes)
+    atm = sorted(
+        (q for q in snapshot.quotes if q.expiry == near),
+        key=lambda q: abs(q.strike - snapshot.spot),
+    )[:n_legs]
+
+    positions = []
+    marks = {}
+    for i, q in enumerate(atm):
+        symbol = f"LEG{i}"
+        positions.append(
+            Position(
+                contract=OptionContract(
+                    symbol=symbol,
+                    strike=q.strike,
+                    expiry=q.expiry,
+                    option_type=q.option_type,
+                    lot_size=50,
+                ),
+                quantity=50.0,
+                entry_price=q.mid,
+            )
+        )
+        marks[symbol] = q.mid
+
+    return BookContext(
+        portfolio=Portfolio(positions=tuple(positions), equity=200_000.0),
+        marks=marks,
+        equity=200_000.0,
+        margin_used=45_000.0,
+        margin_available=155_000.0,
+    )
+
+
+class TestScenarioGrid:
+    def test_absent_without_a_book(self, payload):
+        """A grid for a contract the user does not hold answers nothing."""
+        assert payload.scenario_grid is None
+
+    def test_built_from_the_real_book(self, chain):
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        result = analytics.build_from_raw_chain(chain, _book_from_chain(chain))
+
+        grid = result.scenario_grid
+        assert grid is not None
+        assert grid["legsPriced"] == 2
+        assert grid["legsExcluded"] == 0
+
+    def test_pnl_is_vol_by_spot_for_plotly(self, chain):
+        """Plotly heatmap z is indexed [y][x]; y is vol, x is spot.
+
+        Regression guard: the engine cube is (spot, vol, time), so emitting it
+        untransposed silently draws the heatmap sideways.
+        """
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        grid = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).scenario_grid
+
+        assert len(grid["pnl"]) == len(grid["volShifts"])
+        assert len(grid["pnl"][0]) == len(grid["spotShifts"])
+
+    def test_axes_are_percent_not_fractions(self, chain):
+        """The heatmap axes render with a '%' suffix.
+
+        Emitting 0.10 for a 10% move would draw it as 0.1%.
+        """
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        grid = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).scenario_grid
+
+        assert max(grid["spotShifts"]) == pytest.approx(10.0)
+        assert min(grid["spotShifts"]) == pytest.approx(-10.0)
+        assert max(grid["volShifts"]) == pytest.approx(5.0)
+
+    def test_base_scenario_has_zero_pnl(self, chain):
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        grid = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).scenario_grid
+
+        spot_mid = grid["spotShifts"].index(0.0)
+        vol_mid = grid["volShifts"].index(0.0)
+        assert grid["pnl"][vol_mid][spot_mid] == pytest.approx(0.0, abs=1e-6)
+
+    def test_worst_is_the_grid_minimum(self, chain):
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        grid = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).scenario_grid
+
+        flat = [v for row in grid["pnl"] for v in row]
+        assert grid["worst"]["pnl"] == pytest.approx(min(flat))
+        assert grid["best"]["pnl"] == pytest.approx(max(flat))
+
+
+class TestRiskDashboard:
+    def test_reports_no_book_rather_than_zeros(self, payload):
+        """Zero exposure reads as a flat book; absent must be distinguishable."""
+        risk = payload.risk_dashboard
+        assert risk["hasBook"] is False
+        assert risk["current"] is None
+        assert risk["verdicts"] is None
+        assert risk["drawdown"] is None
+
+    def test_limits_come_from_config(self, payload):
+        limits = payload.risk_dashboard["limits"]
+        assert limits["delta"] == settings.risk_max_abs_delta
+        assert limits["vega"] == settings.risk_max_abs_vega
+
+    def test_exposure_from_the_real_book(self, chain):
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        risk = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).risk_dashboard
+
+        assert risk["hasBook"] is True
+        assert risk["legsPriced"] == 2
+        assert risk["current"]["vega"] > 0  # long two ATM options
+        assert risk["current"]["gamma"] > 0
+
+    def test_margin_utilization_from_funds(self, chain):
+        analytics = LiveAnalytics(LiveAnalyticsConfig(vol_model="essvi"))
+        risk = analytics.build_from_raw_chain(chain, _book_from_chain(chain)).risk_dashboard
+
+        # 45k used of 200k equity
+        assert risk["marginUtilization"] == pytest.approx(0.225)
+
+
+class TestHigherOrderGreeks:
+    def test_absent_without_jax_rather_than_stubbed(self, payload):
+        """The panel reports nothing when JAX is absent — never stand-in numbers.
+
+        Holds either way, so it is the one assertion that does not need the
+        optional extra.
+        """
+        if not _HAS_JAX:
+            assert payload.higher_order_greeks is None
+
+    @pytest.mark.skipif(not _HAS_JAX, reason="optional jax extra not installed")
+    def test_built_from_the_live_atm_contract(self, payload):
+        hog = payload.higher_order_greeks
+        assert hog is not None
+        for key in ("charm", "veta", "speed", "color", "ultima", "zomma"):
+            assert key in hog
+            assert isinstance(hog[key], float)
+
+    @pytest.mark.skipif(not _HAS_JAX, reason="optional jax extra not installed")
+    def test_reports_the_contract_it_priced(self, payload, chain):
+        contract = payload.higher_order_greeks["contract"]
+        assert contract["spot"] == pytest.approx(chain.spot)
+        assert contract["vol"] > 0
+        assert contract["optionType"] in ("call", "put")
