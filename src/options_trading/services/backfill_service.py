@@ -289,6 +289,9 @@ class BackfillConfig:
     #: than this fraction. Measured at ~0.35% against real 2026-09 data, where
     #: the index feed was the one at fault, so this warns rather than rejects.
     max_spot_divergence: float = 0.002
+    #: Treat days that already hold a reconstruction as done, so a long run
+    #: can be resumed after a rate limit without duplicating what it wrote.
+    skip_existing_backfill: bool = True
 
 
 @dataclass(frozen=True)
@@ -351,20 +354,28 @@ class HistoricalChainBackfill:
         self._sleep = sleep_fn or time.sleep
 
     def _existing_live_days(self) -> set[str]:
-        """UTC dates already covered by a *live* capture.
+        """UTC dates a reconstruction must not write to.
 
-        Backfill never overwrites a captured day. A real book beats a
-        reconstruction of one, and silently replacing quoted data with traded
-        data would be the worst possible outcome of a tool meant to add
-        history.
+        Always includes days covered by a *live* capture: backfill never
+        overwrites a captured day, because a real book beats a reconstruction
+        of one and silently replacing quoted data with traded data would be
+        the worst possible outcome of a tool meant to add history.
+
+        With ``skip_existing_backfill`` it also includes days already
+        reconstructed, which makes a run resumable. Without it, re-running
+        over the same range appends a second set of snapshots for every
+        instant, and the duplicates are indistinguishable from a genuinely
+        busier session.
         """
         days: set[str] = set()
         for path in self._store.list_snapshots(self._config.underlying):
             try:
-                if self._store.read(path).source is ChainSource.LIVE:
-                    days.add(path.parent.name)
+                source = self._store.read(path).source
             except Exception:
                 logger.warning("Could not read %s while checking coverage; skipping", path)
+                continue
+            if source is ChainSource.LIVE or self._config.skip_existing_backfill:
+                days.add(path.parent.name)
         return days
 
     def run(

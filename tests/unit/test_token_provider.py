@@ -389,3 +389,24 @@ class TestAnalyticsToken:
             provider.invalidate()
 
         assert configured not in caplog.text
+
+
+def test_the_suite_never_sees_a_real_analytics_token():
+    """conftest neutralises it, and this is what keeps that true.
+
+    TokenProvider reads the token from settings, so a developer with one in
+    .env takes a different branch here than CI does: fourteen tests in this
+    file failed exactly that way once. A suite whose result depends on whose
+    machine ran it is as broken as one that depends on the wall clock.
+
+    It is also a disclosure control. A failing assertion prints both sides of
+    the comparison, so a real token would be written to pytest output and CI
+    logs in plaintext — which is how the original failure surfaced it.
+    """
+    from options_trading.config.settings import settings
+
+    configured = settings.upstox_analytics_token
+    value = configured.get_secret_value().strip() if configured else ""
+
+    assert value == "", "the suite must run against no Analytics Token, whatever .env holds"
+    assert TokenProvider._analytics_token() is None

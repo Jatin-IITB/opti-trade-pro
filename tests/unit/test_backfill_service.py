@@ -234,6 +234,30 @@ class TestOrchestration:
         assert len(stored) == 1
         assert SnapshotStore(tmp_path).read(stored[0]).source is ChainSource.BACKFILL
 
+    def test_a_rerun_is_resumable_not_duplicating(self, tmp_path) -> None:
+        """A 35-minute run must survive a rate limit without doubling up.
+
+        Re-running over the same range would otherwise append a second set of
+        snapshots for every instant, and duplicates are indistinguishable from
+        a genuinely busier session once they are on disk.
+        """
+        first = self._backfill(tmp_path).run("2026-09-08", self.DAYS, self.ZONE)
+        assert [r.written for r in first] == [True]
+
+        second = self._backfill(tmp_path).run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert [r.written for r in second] == [False]
+        assert len(SnapshotStore(tmp_path).list_snapshots("NIFTY")) == 1
+
+    def test_resume_can_be_turned_off(self, tmp_path) -> None:
+        """Opting out must still refuse to clobber a live day."""
+        config = BackfillConfig(snapshot_times=("15:25",), skip_existing_backfill=False)
+        self._backfill(tmp_path, config=config).run("2026-09-08", self.DAYS, self.ZONE)
+
+        again = self._backfill(tmp_path, config=config).run("2026-09-08", self.DAYS, self.ZONE)
+
+        assert [r.written for r in again] == [True]
+
     def test_it_never_overwrites_a_live_captured_day(self, tmp_path) -> None:
         """A real book beats a reconstruction of one.
 

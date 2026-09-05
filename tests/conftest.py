@@ -31,6 +31,19 @@ os.environ.setdefault("UPSTOX_SECRET_KEY", "test_secret_key")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-ci")
 os.environ.setdefault("DEBUG", "true")
 
+# Forced empty, not setdefault: the suite must never see a real Analytics
+# Token. TokenProvider reads it from settings, so a developer who has one in
+# .env takes a different branch in fourteen tests than CI does — the suite
+# would pass or fail depending on whose machine ran it, which is the same
+# class of defect as depending on the wall clock.
+#
+# It is also a disclosure risk. A failing assertion prints both sides of the
+# comparison, so a real token would land in pytest output and CI logs in
+# plaintext. Environment variables take precedence over .env in
+# pydantic-settings, so this neutralises it wherever it is configured; tests
+# that exercise the Analytics Token path set it explicitly via monkeypatch.
+os.environ["UPSTOX_ANALYTICS_TOKEN"] = ""
+
 # E402: these must follow the sys.path and os.environ setup above — importing
 # them earlier is the bug this block exists to prevent.
 import options_trading  # noqa: E402
